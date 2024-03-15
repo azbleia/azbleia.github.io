@@ -1,20 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hello World WebXR</title>
-    <script src="https://code.jquery.com/pep/0.4.3/pep.js"></script> <!-- Polyfill for Pointer Events -->
-</head>
-<body>
-    <script>
-        async function initXR() {
-            const session = await navigator.xr.requestSession('immersive-vr');
-            // Session is now started
-            session.end(); // End the session
-        }
-
-        initXR().catch(console.error);
-    </script>
-</body>
+  <head>
+    <title>WebXR Hello World!</title>
+    <!-- Include the aframe library -->
+    <script src="https://aframe.io/releases/0.8.2/aframe.min.js"></script>
+  </head>
+  <body>
+    <!-- Start your XR scene. This creates a <canvas> element, starts three.js
+    rendering and adds default lighting -->
+    <a-scene>
+      <!-- Create a "Sky Box" by referencing in an equirectangular image. The
+      <a-sky> element creates a large sphere with a color or texture mapped to
+      the inside. -->
+      <a-sky src="sample_equirectangulars/3.jpg"></a-sky>
+    </a-scene>
+  </body>
 </html>
