@@ -1,1 +1,20 @@
-hello world
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hello World WebXR</title>
+    <script src="https://code.jquery.com/pep/0.4.3/pep.js"></script> <!-- Polyfill for Pointer Events -->
+</head>
+<body>
+    <script>
+        async function initXR() {
+            const session = await navigator.xr.requestSession('immersive-vr');
+            // Session is now started
+            session.end(); // End the session
+        }
+
+        initXR().catch(console.error);
+    </script>
+</body>
+</html>
