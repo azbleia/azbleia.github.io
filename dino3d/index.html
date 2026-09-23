@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dino Run 3D</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <style>
+    :root { --bg: #f7f7f7; --fg: #535353; }
+    body.night { --bg: #202124; --fg: #d2d2d2; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      transition: background-color .6s, color .6s;
+      font-family: 'Press Start 2P', ui-monospace, Consolas, monospace;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      box-sizing: border-box;
+      user-select: none;
+    }
+    main { width: 100%; max-width: 1600px; }
+    header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 12px; margin-bottom: 12px; font-size: 14px;
+    }
+    #status { font-size: 9px; opacity: .7; line-height: 1.6; }
+    #score { white-space: nowrap; }
+    #hi { opacity: .7; margin-right: 1.2em; }
+    @keyframes blink { 50% { opacity: 0; } }
+    #cur.blink { animation: blink .25s steps(1) 4; }
+    /* The woven canvas: no border, radius, shadow, filter or transform here or on any
+       ancestor. The HUD lives above and below it, never on top of it. */
+    #game { display: block; width: 100%; aspect-ratio: 3 / 1; max-height: 60vh; touch-action: none; }
+    #msg { text-align: center; font-size: 14px; min-height: 1.5em; margin: 16px 0 8px; }
+    .hint { text-align: center; font-size: 9px; opacity: .6; margin: 0; line-height: 1.8; }
+    @media (max-width: 600px) { header, #msg { font-size: 10px; } }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d.js",
+      "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d-three.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <main>
+    <header>
+      <span id="status">loading…</span>
+      <span id="score"><span id="hi">HI 00000</span><span id="cur">00000</span></span>
+    </header>
+    <canvas id="game"></canvas>
+    <p id="msg">PRESS SPACE OR TAP TO START</p>
+    <p class="hint">SPACE / &uarr; JUMP (HOLD = HIGHER) &middot; &darr; DUCK &middot; F FULLSCREEN</p>
+  </main>
+  <script type="module" src="./game.js"></script>
+</body>
+</html>
