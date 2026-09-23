@@ -22,6 +22,7 @@ const CELL = 0.0132;
 const GEM_R = 0.0062;
 const SWAP_T = 0.18, CLEAR_T = 0.28, FALL_G = 70, HINT_AFTER = 7;
 const LIFT = 0.008;                            // how far a selected gem rises out of the glass
+const HOVER_LIFT = 0.005;                      // ...and a gem under the pointer
 
 const canvas = document.getElementById('game');
 
@@ -108,7 +109,7 @@ function makeGem(type, c, r, special = null) {
     mesh = new THREE.Mesh(GEMS[type].geo, GEM_MATS[type]);
   }
   gemsGroup.add(mesh);
-  return { type: special === 'hyper' ? -1 : type, special, mesh, gx: c, gy: r, c, r, vy: 0, phase: Math.random() * 6.28, clearing: 0 };
+  return { type: special === 'hyper' ? -1 : type, special, mesh, gx: c, gy: r, c, r, vy: 0, phase: Math.random() * 6.28, clearing: 0, hover: 0 };
 }
 function removeGem(g) {
   gemsGroup.remove(g.mesh);
@@ -223,7 +224,7 @@ const S = {
   phase: 'ready',                              // ready | idle | swap | swapBack | clear | fall | shuffle
   t: 0, a: null, b: null, cascade: 0,
   score: 0, best: 0, level: 1, levelPts: 0,
-  selected: null, idleT: 0, hint: null,
+  selected: null, idleT: 0, hint: null, hover: null,
 };
 try { S.best = Number(localStorage.getItem('gems3d-best')) || 0; } catch { /* storage unavailable */ }
 const levelNeed = (lvl) => 600 + lvl * 400;
@@ -367,6 +368,8 @@ addEventListener('pointerdown', (e) => {
   drag = { cell, x: e.clientX, y: e.clientY };
 });
 addEventListener('pointermove', (e) => {
+  const cell = pointerCell(e);
+  S.hover = e.pointerType !== 'touch' && inBoard(cell) ? cell : null;
   if (!drag || S.phase !== 'idle') return;
   const px = canvas.clientHeight * (CELL / VDH) * fit * 0.4;   // 40% of a cell, in CSS pixels
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
@@ -377,6 +380,8 @@ addEventListener('pointermove', (e) => {
   if (inBoard(to)) trySwap([r, c], to);
 });
 addEventListener('pointerup', () => { drag = null; });
+document.addEventListener('pointerleave', () => { S.hover = null; });
+addEventListener('blur', () => { S.hover = null; });
 addEventListener('keydown', (e) => {
   if (e.code === 'KeyF') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {}); }
   if (e.code === 'KeyH' && S.phase === 'idle') S.idleT = HINT_AFTER;
@@ -635,6 +640,10 @@ function update(dt) {
       const w = 0.5 + 0.5 * Math.sin(clock * 6);
       z = LIFT * 0.6 * w; s = 1 + 0.1 * w;
     }
+    // hover: ease the gem under the pointer a little way out of the glass
+    const hovered = S.hover && S.hover[0] === r && S.hover[1] === c && (S.phase === 'idle' || S.phase === 'ready');
+    g.hover += ((hovered ? 1 : 0) - g.hover) * Math.min(1, dt * 12);
+    if (!g.clearing) { z = Math.max(z, g.hover * HOVER_LIFT); s = Math.max(s, 1 + g.hover * 0.07); }
     m.position.set(wx(g.gx), wy(g.gy), z);
     m.visible = g.gy < N + 0.1;
     m.scale.setScalar(s);
