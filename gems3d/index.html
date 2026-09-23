@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gem Swap 3D</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: #0b0a18; user-select: none; }
+    /* The woven canvas fills the window. No border, radius, shadow, filter or transform here
+       or on any ancestor. Score, level and banners are drawn in 3D inside the scene. */
+    #game { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; touch-action: none; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/",
+      "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d.js",
+      "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d-three.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Controls: click a gem then a neighbour, or drag a gem onto a neighbour, to swap.
+       H hint, F fullscreen. -->
+  <canvas id="game"></canvas>
+  <script type="module" src="./game.js"></script>
+</body>
+</html>
