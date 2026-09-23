@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DisplayXR Arcade</title>
+  <meta name="description" content="Three glasses-free 3D games for DisplayXR displays: Dino Run, Tetris and Gem Swap.">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { background: #07071a; user-select: none; }
+    /* The woven canvas fills the window. No border, radius, shadow, filter or transform here
+       or on any ancestor. Everything visible is drawn in 3D inside the scene. */
+    #arcade { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; touch-action: none; cursor: default; }
+    #arcade.pointing { cursor: pointer; }
+    /* Plain links for screen readers and no-JS; visually hidden so nothing 2D sits over the 3D. */
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/",
+      "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d.js",
+      "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.7.1/js/inline3d-three.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <nav class="sr-only" aria-label="Games">
+    <h1>DisplayXR Arcade</h1>
+    <a href="./dino3d/">Dino Run 3D</a>
+    <a href="./tetris3d/">Tetris 3D</a>
+    <a href="./gems3d/">Gem Swap 3D</a>
+  </nav>
+  <canvas id="arcade" aria-hidden="true"></canvas>
+  <script type="module">
+    // DisplayXR Arcade — a 3D game menu. One inline-3D session, one woven canvas, rendered per eye
+    // like the SDK's samples/hello-cube; a mono camera everywhere else.
+    // Depth: cards rest on the glass, the selected card lifts out of it, stars drift far behind.
+    import * as THREE from 'three';
+    import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { createInline3D } from '@displayxr/inline3d';
+    import { EdgeFeather } from '@displayxr/inline3d/three';
+
+    const VDH = 0.12;
+    const canvas = document.getElementById('arcade');
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(1);
+    renderer.autoClear = false;
+    const scene = new THREE.Scene();
+    scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.add(new THREE.HemisphereLight(0xe0e6ff, 0x20183a, 1.1));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.8);
+    sun.position.set(0.3, 0.8, 1);
+    scene.add(sun);
+    const root = new THREE.Group();
+    scene.add(root);
+
+    const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _c = new THREE.Color();
+    const unitBox = new THREE.BoxGeometry(1, 1, 1);
+
+    // ---- voxel text ------------------------------------------------------------------------------
+    const FONT = {
+      A: [' ### ', '#   #', '#   #', '#####', '#   #', '#   #', '#   #'], C: [' ####', '#    ', '#    ', '#    ', '#    ', '#    ', ' ####'],
+      D: ['#### ', '#   #', '#   #', '#   #', '#   #', '#   #', '#### '], E: ['#####', '#    ', '#    ', '#### ', '#    ', '#    ', '#####'],
+      G: [' ### ', '#   #', '#    ', '# ###', '#   #', '#   #', ' ### '], I: ['#####', '  #  ', '  #  ', '  #  ', '  #  ', '  #  ', '#####'],
+      L: ['#    ', '#    ', '#    ', '#    ', '#    ', '#    ', '#####'], M: ['#   #', '## ##', '# # #', '# # #', '#   #', '#   #', '#   #'],
+      N: ['#   #', '##  #', '# # #', '#  ##', '#   #', '#   #', '#   #'], O: [' ### ', '#   #', '#   #', '#   #', '#   #', '#   #', ' ### '],
+      P: ['#### ', '#   #', '#   #', '#### ', '#    ', '#    ', '#    '], R: ['#### ', '#   #', '#   #', '#### ', '# #  ', '#  # ', '#   #'],
+      S: [' ####', '#    ', '#    ', ' ### ', '    #', '    #', '#### '], T: ['#####', '  #  ', '  #  ', '  #  ', '  #  ', '  #  ', '  #  '],
+      U: ['#   #', '#   #', '#   #', '#   #', '#   #', '#   #', ' ### '], W: ['#   #', '#   #', '#   #', '# # #', '# # #', '## ##', '#   #'],
+      X: ['#   #', '#   #', ' # # ', '  #  ', ' # # ', '#   #', '#   #'], Y: ['#   #', '#   #', ' # # ', '  #  ', '  #  ', '  #  ', '  #  '],
+    };
+    const RAINBOW = [0xff3048, 0xff8a1c, 0xffd531, 0x2fdc6a, 0x3a9bff, 0xc04dff];
+    const textMat = new THREE.MeshStandardMaterial({ roughness: 0.25, metalness: 0.35 });
+    function voxelText(str, vox, depth, hex = null) {
+      const cells = []; const W = str.length * 6 - 1; let li = 0;
+      [...str].forEach((ch, ci) => {
+        const glyph = FONT[ch]; if (!glyph) return;
+        const color = hex ?? RAINBOW[li++ % RAINBOW.length];
+        glyph.forEach((row, gy) => [...row].forEach((px, gx) => { if (px === '#') cells.push([ci * 6 + gx - W / 2, gy, color]); }));
+      });
+      const mesh = new THREE.InstancedMesh(unitBox, textMat, cells.length);
+      mesh.frustumCulled = false;
+      cells.forEach(([x, y, color], i) => {
+        _m.compose(_p.set((x + 0.5) * vox, (3.5 - y - 0.5) * vox, 0), _q.identity(), _s.set(vox * 0.96, vox * 0.96, depth));
+        mesh.setMatrixAt(i, _m); mesh.setColorAt(i, _c.setHex(color));
+      });
+      const g = new THREE.Group(); g.add(mesh); return g;
+    }
+
+    // ---- previews --------------------------------------------------------------------------------
+    function voxelSprite(rows, vox, depth, hex, eyeHex) {
+      const g = new THREE.Group();
+      const body = [], eye = [];
+      const W = Math.max(...rows.map((row) => row.length));
+      rows.forEach((row, r) => [...row].forEach((ch, c) => {
+        const at = [c - W / 2 + 0.5, rows.length - 1 - r];
+        if (ch === '#') body.push(at); else if (ch === 'o') eye.push(at);
+      }));
+      for (const [list, color] of [[body, hex], [eye, eyeHex]]) {
+        if (!list.length) continue;
+        const mesh = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.1 }), list.length);
+        list.forEach(([x, y], i) => { _m.compose(_p.set(x * vox, (y + 0.5) * vox, 0), _q.identity(), _s.set(vox, vox, depth)); mesh.setMatrixAt(i, _m); });
+        mesh.frustumCulled = false; g.add(mesh);
+      }
+      return g;
+    }
+    const DINO = [
+      '            ########  ', '           ##o#######', '           ##########', '           ##########', '           #####     ',
+      '           ########  ', '#         #####      ', '#        #######     ', '##      ##########   ', '###    ########  #   ',
+      '############         ', ' ##########          ', '  #########          ', '   #######           ', '    ##  ##            ',
+      '    #    #            ', '    ##   ##           ',
+    ];
+    const CACTUS = ['  ##  ', '  ##  ', '# ## #', '# ## #', '######', '  ##  ', '  ##  ', '  ##  ', '  ##  ', '  ##  '];
+
+    function dinoPreview() {
+      const g = new THREE.Group();
+      const dino = voxelSprite(DINO, 0.00105, 0.0063, 0xdedede, 0x15172e);
+      dino.position.set(-0.007, -0.011, 0);
+      const cactus = voxelSprite(CACTUS, 0.00105, 0.0055, 0x7fd66b, 0x000000);
+      cactus.position.set(0.016, -0.011, -0.004);
+      const ground = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.0007, 0.014), new THREE.MeshStandardMaterial({ color: 0x9a9aa6, roughness: 0.6 }));
+      ground.position.set(0, -0.0114, -0.001);
+      g.add(dino, cactus, ground);
+      g.userData.animate = (t, sel) => {
+        const hop = Math.max(0, Math.sin(t * (sel ? 5 : 2.2)));
+        dino.position.y = -0.011 + hop * hop * 0.009;
+        g.rotation.y = Math.sin(t * 0.7) * 0.45;
+      };
+      return g;
+    }
+
+    const blockGeo = new RoundedBoxGeometry(0.0052, 0.0052, 0.0052, 2, 0.0009);
+    const blockMats = {};
+    const blockMat = (hex) => (blockMats[hex] ??= new THREE.MeshStandardMaterial({ color: hex, roughness: 0.3, metalness: 0.1 }));
+    function tetrisPreview() {
+      const g = new THREE.Group();
+      const S = 0.0055;
+      const I = 0x2fd4e8, O = 0xf7d038, Tt = 0xa45ae6, L = 0xf5953a, Z = 0xf0524f, J = 0x3b7bf2;
+      const cells = [[0, 0, I], [1, 0, I], [2, 0, I], [3, 0, I], [0, 1, O], [1, 1, O], [0, 2, O], [1, 2, O], [2, 1, Z], [3, 1, Z], [3, 2, J], [2, 2, L], [0, 3, L], [3, 3, J]];
+      const stack = new THREE.Group();
+      for (const [x, y, hex] of cells) { const b = new THREE.Mesh(blockGeo, blockMat(hex)); b.position.set((x - 1.5) * S, (y - 1.8) * S, 0); stack.add(b); }
+      const piece = new THREE.Group();
+      for (const [x, y] of [[-1, 0], [0, 0], [1, 0], [0, 1]]) { const b = new THREE.Mesh(blockGeo, blockMat(Tt)); b.position.set(x * S, y * S, 0); piece.add(b); }
+      g.add(stack, piece);
+      g.userData.animate = (t, sel) => {
+        piece.position.set(0, 0.014 + Math.sin(t * 1.8) * 0.002, 0.004);
+        piece.rotation.z = t * (sel ? 2.4 : 0.9);
+        g.rotation.y = Math.sin(t * 0.6) * 0.5;
+      };
+      return g;
+    }
+
+    function latheGem(sides, phi, r) {
+      const pts = [[0.001, -0.62], [0.98, 0.02], [1, 0.1], [0.62, 0.34], [0.001, 0.34]].map(([x, y]) => new THREE.Vector2(x, y));
+      return new THREE.LatheGeometry(pts, sides, phi).rotateX(Math.PI / 2).scale(r, r, r);
+    }
+    const gemMat = (hex) => new THREE.MeshStandardMaterial({ color: hex, metalness: 0.25, roughness: 0.1, flatShading: true, envMapIntensity: 1.6, emissive: hex, emissiveIntensity: 0.08 });
+    function gemsPreview() {
+      const g = new THREE.Group();
+      const R = 0.0068;
+      const defs = [
+        [latheGem(4, Math.PI / 4, R), 0xff3048, -0.009, 0.006], [latheGem(8, Math.PI / 8, R), 0x2fdc6a, 0.009, 0.006],
+        [latheGem(3, Math.PI, R * 1.1), 0xc04dff, -0.009, -0.009], [new THREE.DodecahedronGeometry(R * 0.92), 0x3a9bff, 0.009, -0.009],
+      ];
+      const gems = defs.map(([geo, hex, x, y], i) => { const m = new THREE.Mesh(geo, gemMat(hex)); m.position.set(x, y, 0); m.userData.phase = i * 1.7; g.add(m); return m; });
+      const star = new THREE.Mesh(new THREE.OctahedronGeometry(R * 0.8).scale(0.78, 1.05, 0.6), gemMat(0xffd531));
+      star.position.set(0, -0.0015, 0.006);
+      g.add(star);
+      g.userData.animate = (t, sel) => {
+        for (const m of gems) { m.rotation.set(Math.sin(t + m.userData.phase) * 0.25, Math.sin(t * 0.8 + m.userData.phase) * 0.6, 0); }
+        star.rotation.y = t * (sel ? 4 : 1.5);
+        star.scale.setScalar(1 + (sel ? 0.12 : 0.05) * Math.sin(t * 5));
+      };
+      return g;
+    }
+
+    // ---- cards -----------------------------------------------------------------------------------
+    const GAMES = [
+      { name: 'DINO RUN', href: './dino3d/', accent: 0xff9f43, make: dinoPreview },
+      { name: 'TETRIS', href: './tetris3d/', accent: 0x3aa0ff, make: tetrisPreview },
+      { name: 'GEM SWAP', href: './gems3d/', accent: 0xff3b8d, make: gemsPreview },
+    ];
+    const CARD_W = 0.056, CARD_H = 0.07, GAP = 0.07;
+    const cardGeo = new RoundedBoxGeometry(CARD_W, CARD_H, 0.004, 3, 0.004);
+    const rimGeo = new RoundedBoxGeometry(CARD_W + 0.0024, CARD_H + 0.0024, 0.002, 3, 0.005);
+    const cards = GAMES.map((game, i) => {
+      const g = new THREE.Group();
+      const panel = new THREE.Mesh(cardGeo, new THREE.MeshStandardMaterial({ color: 0x14163a, roughness: 0.55, metalness: 0.2 }));
+      panel.position.z = -0.012;
+      const rimMat = new THREE.MeshStandardMaterial({ color: game.accent, emissive: game.accent, emissiveIntensity: 0.5, roughness: 0.3 });
+      const rim = new THREE.Mesh(rimGeo, rimMat);
+      rim.position.z = -0.0145;
+      const preview = game.make();
+      preview.position.set(0, 0.006, 0);
+      const label = voxelText(game.name, 0.00092, 0.0016, 0xffffff);
+      label.position.set(0, -0.0255, -0.009);
+      g.add(panel, rim, preview, label);
+      g.position.x = (i - 1) * GAP;
+      root.add(g);
+      return { g, rimMat, preview, game, lift: 0 };
+    });
+
+    const title = voxelText('DISPLAYXR ARCADE', 0.00135, 0.004);
+    title.position.set(0, 0.0475, 0.002);
+    const hint = voxelText('TAP A GAME TO PLAY', 0.0007, 0.0012, 0x8e94c8);
+    hint.position.set(0, -0.0525, 0);
+    root.add(title, hint);
+
+    // ---- starfield, far behind the glass -----------------------------------------------------------
+    const STARS = 500;
+    const starPos = new Float32Array(STARS * 3);
+    for (let i = 0; i < STARS; i++) {
+      starPos[i * 3] = (Math.random() * 2 - 1) * 0.3;
+      starPos[i * 3 + 1] = (Math.random() * 2 - 1) * 0.16;
+      starPos[i * 3 + 2] = -0.04 - Math.random() * 0.32;
+    }
+    const starGeo = new THREE.BufferGeometry();
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xaab4ff, size: 0.0011, sizeAttenuation: true, transparent: true, opacity: 0.85, depthWrite: false }));
+    root.add(stars);
+
+    // ---- interaction -----------------------------------------------------------------------------
+    let selected = 1, launching = null, launchT = 0, leaving = false, fit = 1;
+    function hitCard(e) {
+      const rect = canvas.getBoundingClientRect();
+      const u = (e.clientX - rect.left) / rect.width, v = (e.clientY - rect.top) / rect.height;
+      const halfW = (VDH / 2) * (rect.width / rect.height);
+      const x = (u * 2 - 1) * halfW / fit, y = (1 - v * 2) * (VDH / 2) / fit;
+      return cards.findIndex((c) => Math.abs(x - c.g.position.x) < CARD_W / 2 && Math.abs(y) < CARD_H / 2);
+    }
+    function launch(i) {
+      if (launching !== null) return;
+      selected = i; launching = i; launchT = 0;
+      // wall-clock timer, so a throttled frame rate can't stall the hand-off
+      setTimeout(() => { if (launching === i && !leaving) { leaving = true; wall?.close?.(); location.href = GAMES[i].href; } }, 500);
+    }
+    addEventListener('pointermove', (e) => {
+      const i = hitCard(e);
+      canvas.classList.toggle('pointing', i >= 0);
+      if (i >= 0 && launching === null) selected = i;
+    });
+    addEventListener('pointerdown', (e) => { if (e.button !== 0) return; const i = hitCard(e); if (i >= 0) launch(i); });
+    addEventListener('keydown', (e) => {
+      if (launching !== null) return;
+      if (e.code === 'ArrowLeft') selected = (selected + 2) % 3;
+      else if (e.code === 'ArrowRight') selected = (selected + 1) % 3;
+      else if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); launch(selected); }
+      else if (['Digit1', 'Digit2', 'Digit3'].includes(e.code)) launch(Number(e.code.slice(-1)) - 1);
+    });
+    // coming back via the browser's Back button: reset the launch animation
+    addEventListener('pageshow', () => { launching = null; leaving = false; });
+
+    // ---- animation ---------------------------------------------------------------------------------
+    let clock = 0;
+    function update(dt) {
+      clock += dt;
+      cards.forEach((c, i) => {
+        const target = i === selected ? 1 : 0;
+        c.lift += (target - c.lift) * Math.min(1, dt * 8);
+        let z = c.lift * 0.012, s = 1 + c.lift * 0.08;
+        if (launching === i) { const k = Math.min(1, launchT / 0.45); z += k * k * 0.045; s += k * 0.5; }
+        c.g.position.set((i - 1) * GAP, Math.sin(clock * 1.2 + i * 2) * 0.0012 + c.lift * 0.002, z);
+        c.g.scale.setScalar(s);
+        c.g.rotation.y = Math.sin(clock * 0.5 + i) * 0.05 * (1 - c.lift);
+        c.rimMat.emissiveIntensity = 0.35 + c.lift * (0.9 + 0.3 * Math.sin(clock * 5));
+        c.preview.userData.animate(clock + i * 3, i === selected);
+      });
+      title.rotation.y = Math.sin(clock * 0.6) * 0.08;
+      title.position.y = 0.0475 + Math.sin(clock * 1.1) * 0.0008;
+      const sp = stars.geometry.attributes.position;
+      for (let i = 0; i < STARS; i++) { let x = sp.array[i * 3] - dt * 0.004; if (x < -0.3) x += 0.6; sp.array[i * 3] = x; }
+      sp.needsUpdate = true;
+      if (launching !== null) launchT += dt;
+    }
+
+    // ---- layout & rendering ---------------------------------------------------------------------------
+    const LAYOUT_HALF_W = GAP + CARD_W / 2 + 0.02;
+    const monoCam = new THREE.PerspectiveCamera(30, 1.6, 0.005, 10);
+    monoCam.position.set(0, 0, (VDH / 2) / Math.tan(THREE.MathUtils.degToRad(15)));
+    monoCam.lookAt(0, 0, 0);
+    let sbsMode = false;
+    function sizeToCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const cw = canvas.clientWidth || 960, ch = canvas.clientHeight || 600;
+      renderer.setSize(Math.round(cw * dpr) * (sbsMode ? 2 : 1), Math.round(ch * dpr), false);
+      monoCam.aspect = cw / ch; monoCam.updateProjectionMatrix();
+      fit = Math.min(1, ((VDH / 2) * (cw / ch)) / LAYOUT_HALF_W);
+      root.scale.setScalar(fit);
+    }
+    new ResizeObserver(sizeToCanvas).observe(canvas);
+    sizeToCanvas();
+
+    let last = 0;
+    function tick() { const now = performance.now(); const dt = last ? Math.min(0.1, (now - last) / 1000) : 0; last = now; update(dt); }
+    const eyeCam = new THREE.PerspectiveCamera();
+    eyeCam.matrixAutoUpdate = false;
+    const feather = new EdgeFeather(THREE, { px: 26 });
+    const _size = new THREE.Vector2();
+    function onXRFrame(views, layer) {
+      tick();
+      renderer.getSize(_size);
+      renderer.clear();
+      renderer.setScissorTest(true);
+      for (const view of views) {
+        const i = views.indexOf(view), half = _size.x / 2;
+        const vp = layer.getViewport(view) || { x: i === 0 ? 0 : half, y: 0, width: half, height: _size.y };
+        renderer.setViewport(vp.x, vp.y, vp.width, vp.height);
+        renderer.setScissor(vp.x, vp.y, vp.width, vp.height);
+        eyeCam.projectionMatrix.fromArray(view.projectionMatrix);
+        eyeCam.projectionMatrixInverse.copy(eyeCam.projectionMatrix).invert();
+        eyeCam.matrix.fromArray(view.transform.matrix);
+        eyeCam.matrixWorld.copy(eyeCam.matrix);
+        eyeCam.matrixWorldInverse.copy(eyeCam.matrixWorld).invert();
+        renderer.render(scene, eyeCam);
+        feather.render(renderer, vp);
+      }
+      renderer.setScissorTest(false);
+    }
+    function onMonoFrame() {
+      requestAnimationFrame(onMonoFrame);
+      tick();
+      renderer.getSize(_size);
+      renderer.clear();
+      renderer.setViewport(0, 0, _size.x, _size.y);
+      renderer.render(scene, monoCam);
+    }
+
+    update(0);
+    let wall = null;
+    wall = await createInline3D({ lazy: false });
+    if (wall.supported) {
+      wall.addScene(canvas, onXRFrame, { virtualDisplayHeight: VDH });
+      sbsMode = true;
+      sizeToCanvas();
+    } else {
+      document.title = 'DisplayXR Arcade (2D preview)';
+      requestAnimationFrame(onMonoFrame);
+    }
+  </script>
+</body>
+</html>
