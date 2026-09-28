@@ -43,6 +43,7 @@
     import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
     import { createInline3D } from '@displayxr/inline3d';
     import { EdgeFeather } from '@displayxr/inline3d/three';
+    import { readViewScale, sizeBackingStore } from './backing.js';
 
     const VDH = 0.12;
     const canvas = document.getElementById('arcade');
@@ -286,9 +287,8 @@
     monoCam.lookAt(0, 0, 0);
     let sbsMode = false;
     function sizeToCanvas() {
-      const dpr = window.devicePixelRatio || 1;
       const cw = canvas.clientWidth || 960, ch = canvas.clientHeight || 600;
-      renderer.setSize(Math.round(cw * dpr) * (sbsMode ? 2 : 1), Math.round(ch * dpr), false);
+      sizeBackingStore(renderer, canvas, cw, ch, sbsMode);
       monoCam.aspect = cw / ch; monoCam.updateProjectionMatrix();
       fit = Math.min(1, ((VDH / 2) * (cw / ch)) / LAYOUT_HALF_W);
       root.scale.setScalar(fit);
@@ -338,6 +338,7 @@
       wall.addScene(canvas, onXRFrame, { virtualDisplayHeight: VDH });
       sbsMode = true;
       sizeToCanvas();
+      readViewScale(wall).then(sizeToCanvas);
     } else {
       document.title = 'DisplayXR Arcade (2D preview)';
       requestAnimationFrame(onMonoFrame);

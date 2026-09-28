@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import { createInline3D } from '@displayxr/inline3d';
 import { EdgeFeather } from '@displayxr/inline3d/three';
+import { readViewScale, sizeBackingStore } from '../backing.js';
 
 // ---- tuning: metres and seconds, composed for a 12 cm-tall virtual display ------------------
 const VDH = 0.12;                    // virtualDisplayHeight handed to addScene
@@ -351,10 +352,8 @@ function layoutWorld(first) {
 
 let sbsMode = false;
 function sizeToCanvas() {
-  const dpr = window.devicePixelRatio || 1;
   const cw = canvas.clientWidth || 900, ch = canvas.clientHeight || 300;
-  const w = Math.round(cw * dpr), h = Math.round(ch * dpr);
-  renderer.setSize(sbsMode ? w * 2 : w, h, false);
+  sizeBackingStore(renderer, canvas, cw, ch, sbsMode);
   monoCam.aspect = cw / ch;
   monoCam.updateProjectionMatrix();
   halfW = (VDH / 2) * (cw / ch);
@@ -605,6 +604,7 @@ update(0, performance.now());
     wall.addScene(canvas, onXRFrame, { virtualDisplayHeight: VDH });
     sbsMode = true;
     sizeToCanvas();
+    readViewScale(wall).then(sizeToCanvas);
     statusEl.textContent = 'GLASSES-FREE 3D ON · MOVE YOUR HEAD';
   } else {
     statusEl.textContent = '2D PREVIEW · OPEN IN THE DISPLAYXR BROWSER FOR 3D';

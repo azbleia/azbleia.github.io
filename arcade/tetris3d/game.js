@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { createInline3D } from '@displayxr/inline3d';
 import { EdgeFeather } from '@displayxr/inline3d/three';
+import { readViewScale, sizeBackingStore } from '../backing.js';
 
 // ---- tuning (metres, seconds) — composed for a 12 cm-tall virtual display --------------------
 const VDH = 0.12;
@@ -620,10 +621,8 @@ monoCam.lookAt(0, 0, 0);
 
 let sbsMode = false;
 function sizeToCanvas() {
-  const dpr = window.devicePixelRatio || 1;
   const cw = canvas.clientWidth || 960, ch = canvas.clientHeight || 600;
-  const w = Math.round(cw * dpr), h = Math.round(ch * dpr);
-  renderer.setSize(sbsMode ? w * 2 : w, h, false);
+  sizeBackingStore(renderer, canvas, cw, ch, sbsMode);
   monoCam.aspect = cw / ch;
   monoCam.updateProjectionMatrix();
   // Narrower than the layout needs (e.g. a squarish window)? Shrink the whole scene to fit.
@@ -695,6 +694,7 @@ if (new URLSearchParams(location.search).has('debug')) window.tetris = { G, star
     wall.addScene(canvas, onXRFrame, { virtualDisplayHeight: VDH });
     sbsMode = true;
     sizeToCanvas();
+    readViewScale(wall).then(sizeToCanvas);
     console.log('[tetris3d] inline-3D active: weaving glasses-free 3D');
   } else {
     document.title = 'Tetris 3D (2D preview)';

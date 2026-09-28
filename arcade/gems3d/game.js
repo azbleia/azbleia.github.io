@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createInline3D } from '@displayxr/inline3d';
 import { EdgeFeather } from '@displayxr/inline3d/three';
+import { readViewScale, sizeBackingStore } from '../backing.js';
 
 // ---- tuning (metres, seconds) — composed for a 12 cm-tall virtual display --------------------
 const VDH = 0.12;
@@ -700,9 +701,8 @@ monoCam.lookAt(0, 0, 0);
 
 let sbsMode = false;
 function sizeToCanvas() {
-  const dpr = window.devicePixelRatio || 1;
   const cw = canvas.clientWidth || 960, ch = canvas.clientHeight || 600;
-  renderer.setSize(Math.round(cw * dpr) * (sbsMode ? 2 : 1), Math.round(ch * dpr), false);
+  sizeBackingStore(renderer, canvas, cw, ch, sbsMode);
   monoCam.aspect = cw / ch;
   monoCam.updateProjectionMatrix();
   const halfW = (VDH / 2) * (cw / ch);
@@ -774,6 +774,7 @@ if (new URLSearchParams(location.search).has('debug')) window.gems = { S, get gr
     wall.addScene(canvas, onXRFrame, { virtualDisplayHeight: VDH });
     sbsMode = true;
     sizeToCanvas();
+    readViewScale(wall).then(sizeToCanvas);
     console.log('[gems3d] inline-3D active: weaving glasses-free 3D');
   } else {
     document.title = 'Gem Swap 3D (2D preview)';
