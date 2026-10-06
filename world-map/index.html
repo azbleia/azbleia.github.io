@@ -26,7 +26,7 @@
   /* Auto-hiding UI: shown on mouse/keyboard/touch activity, fades out after a few idle seconds. */
   #hud, #mode, #credit { transition: opacity .4s ease; }
   body.idle #hud, body.idle #mode, body.idle #credit { opacity: 0; pointer-events: none; }
-  body.idle { cursor: none; }
+  html.idle, html.idle * { cursor: none !important; }
   #credit { position: fixed; left: 16px; bottom: 16px; color: var(--fg); font-size: calc(var(--ui) * .85);
     background: rgba(2,10,9,.78); padding: .3em .7em; border-radius: 8px; }
   #credit a { color: var(--fg); }
@@ -294,10 +294,12 @@ let idleTimer = 0;
 const isEngaged = () => modeEl.matches(":hover") || document.getElementById("credit").matches(":hover") || !!modeEl.querySelector(':focus-visible');
 function wake() {
   document.body.classList.remove('idle');
+  document.documentElement.classList.remove('idle');
   clearTimeout(idleTimer);
   idleTimer = setTimeout(function sleep() {
     if (isEngaged()) { idleTimer = setTimeout(sleep, IDLE_MS); return; }
     document.body.classList.add('idle');
+    document.documentElement.classList.add('idle');
   }, IDLE_MS);
 }
 for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'])
