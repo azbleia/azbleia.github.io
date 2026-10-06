@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relief World Map</title>
+<style>
+  :root { --bg: #04100f; --fg: #f1e8d2; --muted: #c9d4cf; --ui: clamp(16px, 1.25vw, 24px); }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden;
+    font: var(--ui)/1.5 system-ui, sans-serif; }
+  /* The woven canvas must stay visually bare: no border, radius, shadow, mask or filter. */
+  #stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* UI over the weave: plain translucent tints only (no backdrop-filter). */
+  #hud { position: fixed; left: 16px; top: 16px; right: 16px; width: fit-content; color: var(--muted); pointer-events: none;
+    background: rgba(2,10,9,.78); padding: .55em .9em; border-radius: 10px; text-shadow: 0 1px 2px #000; }
+  #hud b { color: var(--fg); font-weight: 700; }
+  #mode { position: fixed; right: 16px; bottom: 16px; display: flex; padding: 5px; gap: 4px;
+    background: rgba(2,10,9,.82); border: 2px solid rgba(241,232,210,.45); border-radius: 999px;
+    font-size: calc(var(--ui) * 1.35); }
+  #mode button { all: unset; cursor: pointer; padding: .4em 1.1em; min-width: 2.2em; text-align: center;
+    border-radius: 999px; color: var(--fg); font-weight: 700; letter-spacing: .05em; }
+  #mode button:hover { background: rgba(241,232,210,.15); }
+  #mode button[aria-pressed="true"] { background: var(--fg); color: #0b1a17; }
+  #mode button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+  #mode button:disabled { opacity: .45; cursor: not-allowed; }
+  #dbg { position: fixed; left: 16px; bottom: 4em; max-width: 60vw; white-space: pre; font: 14px/1.4 monospace;
+    background: rgba(0,0,0,.85); color: #9f9; padding: 8px 10px; border-radius: 8px; pointer-events: none; }
+  #credit { position: fixed; left: 16px; bottom: 16px; color: var(--fg); font-size: calc(var(--ui) * .85);
+    background: rgba(2,10,9,.78); padding: .3em .7em; border-radius: 8px; }
+  #credit a { color: var(--fg); }
+  #load { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted);
+    background: rgba(2,10,9,.78); padding: .5em 1em; border-radius: 10px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.34.0/js/inline3d.js",
+  "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.34.0/js/inline3d-three.js"
+} }
+</script>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="load">Loading relief…</div>
+<div id="hud">
+  <b>− / =</b> depth <span id="d"></span> · <b>L</b> light · <b>T</b> 2D/3D · <b>H</b> hide
+</div>
+<div id="credit"><a href="https://www.vecteezy.com/photo/71161499-detailed-world-map-is-shown-with-beige-continents-and-a-turquoise-sea-background" target="_blank" rel="noopener">World map photo by Vecteezy</a></div>
+<div id="mode" role="group" aria-label="Display mode">
+  <button data-mode="2d" aria-pressed="false">2D</button>
+  <button data-mode="3d" aria-pressed="true">3D</button>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createInline3D, inline3dDisplayModesSupported, inline3dViewRigSupported } from '@displayxr/inline3d';
+import { EyeCamera, displayRig } from '@displayxr/inline3d/three';
+
+const q = new URLSearchParams(location.search);
+const canvas = document.getElementById('stage');
+
+// ---- scene -------------------------------------------------------------------------------
+// Display-rig authoring: the canvas is a portal whose plane is world z = 0 (zero disparity),
+// +z toward the viewer. The map is MAP_W metres wide and the portal is sized to it (cover).
+const MAP_W = 0.4;
+const MAP_ASPECT = 2000 / 1121;
+const RELIEF = 0.035;      // relief.glb height / width, from build.py --relief
+const FOCUS = 0.4;         // fraction of the relief that sits behind the glass
+const state = { depth: +(q.get('depth') ?? 1.0), lightMode: 0 };
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(1);              // viewports are backing-store px; we size the store ourselves
+renderer.autoClear = false;             // one clear per frame, then one draw per eye
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = false;  // static scene: re-render shadows only when something changes
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x04100f);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+
+// Key light: low, warm, upper-left — matches the light baked into the photo.
+const key = new THREE.DirectionalLight(0xfff1dc, 1.6);
+key.castShadow = true;
+key.shadow.mapSize.set(4096, 4096);
+key.shadow.bias = -0.0002;
+key.shadow.normalBias = 0.0008;
+key.shadow.radius = 3;
+const fill = new THREE.HemisphereLight(0x9fd6cf, 0x0a1a18, 0.35);
+scene.add(key, key.target, fill);
+
+const map = new THREE.Group();          // scale.z carries the depth exaggeration
+scene.add(map);
+
+const lights = [
+  [-0.6, 0.5, 0.55, 1.6],  // raking upper-left (default)
+  [0.0, 0.3, 1.0, 1.3],    // front, soft
+  [-0.9, 0.15, 0.3, 2.0],  // very low raking — dramatic relief
+];
+function apply() {
+  map.scale.set(MAP_W, MAP_W, MAP_W * state.depth);
+  map.position.z = -FOCUS * RELIEF * MAP_W * state.depth;
+  const [lx, ly, lz, li] = lights[state.lightMode];
+  key.position.set(lx, ly, lz);
+  key.intensity = li;
+  const s = key.shadow.camera, h = MAP_W * 0.6;
+  s.left = -h; s.right = h; s.top = h; s.bottom = -h; s.near = 0.05; s.far = 3;
+  s.updateProjectionMatrix();
+  renderer.shadowMap.needsUpdate = true;
+  document.getElementById('d').textContent = `(${state.depth.toFixed(2)}×)`;
+}
+apply();
+
+new GLTFLoader().load('out/relief.glb', (gltf) => {
+  const mesh = gltf.scene;
+  mesh.traverse((o) => {
+    if (!o.isMesh) return;
+    o.castShadow = o.receiveShadow = true;
+    o.material.normalScale = new THREE.Vector2(0.8, 0.8);
+    if (o.material.map) o.material.map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  });
+  map.add(mesh);
+  apply();
+  document.getElementById('load').remove();
+}, undefined, (e) => {
+  document.getElementById('load').textContent = 'Failed to load out/relief.glb — serve this folder over http.';
+  console.error(e);
+});
+
+// ---- framing -----------------------------------------------------------------------------
+// Cover: the portal is as tall as the map, or shorter when the window is wider than the map,
+// so the map always fills the frame edge to edge.
+const aspect = () => (canvas.clientWidth || 16) / (canvas.clientHeight || 9);
+const portalHeight = () => Math.min(MAP_W / MAP_ASPECT, MAP_W / aspect());
+
+// Flat fallback camera for browsers without inline-3D: narrow FOV, framed like the portal.
+const FOV = +(q.get('fov') ?? 20);
+const monoCam = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.01, 20);
+function frameMono() {
+  monoCam.aspect = aspect();
+  monoCam.updateProjectionMatrix();
+  const d = portalHeight() / 2 / Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+  monoCam.position.set(0, 0, d);
+  monoCam.lookAt(0, 0, 0);
+}
+
+// ---- backing store -----------------------------------------------------------------------
+// Double-width (left eye | right eye) while woven, 1:1 on the flat fallback. setSize clears
+// the buffer even for an identical size, so compare first and repaint immediately on change.
+let sbs = false;
+let viewScale = { x: 1, y: 1 };
+function sizeStore() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr * viewScale.x));
+  const h = Math.max(1, Math.round(canvas.clientHeight * dpr * viewScale.y));
+  const bufW = sbs ? w * 2 : w;
+  frameMono();
+  if (canvas.width === bufW && canvas.height === h) return false;
+  renderer.setSize(bufW, h, false);
+  return true;
+}
+
+// ---- inline-3D frame loop ----------------------------------------------------------------
+const eyes = [new EyeCamera(THREE), new EyeCamera(THREE)];
+const good = [0, 1].map(() => ({ proj: new Float32Array(16), pose: new Float32Array(16), vp: null }));
+let goodCount = 0;
+let viewCount = 2;              // views the active rendering mode delivers (1 in 2D mode)
+
+function drawEyes(n, setEye) {
+  renderer.clear();
+  renderer.setScissorTest(true);
+  for (let i = 0; i < n; i++) {
+    const vp = good[i].vp;
+    renderer.setViewport(vp.x, vp.y, vp.width, vp.height);
+    renderer.setScissor(vp.x, vp.y, vp.width, vp.height);
+    setEye(i);
+    renderer.render(scene, eyes[i].camera);
+  }
+  renderer.setScissorTest(false);
+}
+function replayLastGood() {
+  if (!goodCount) return;       // before the first good frame do nothing, not even clear
+  drawEyes(goodCount, (i) => eyes[i].setFromMatrices(good[i].proj, good[i].pose));
+}
+function onFrame(views, layer) {
+  // Validate everything before clearing: a short view list or a null viewport must replay the
+  // last good frame, never leave a black or stale canvas for the weave to read.
+  const need = Math.min(viewCount, 2);
+  if (!views || views.length < need || !layer) return replayLastGood();
+  const n = Math.min(views.length, 2);
+  const vps = [];
+  for (let i = 0; i < n; i++) {
+    const vp = layer.getViewport(views[i]);
+    if (!vp || vp.width <= 0 || vp.height <= 0) return replayLastGood();
+    vps.push(vp);
+  }
+  for (let i = 0; i < n; i++) {
+    good[i].proj.set(views[i].projectionMatrix);
+    good[i].pose.set(views[i].transform.matrix);
+    good[i].vp = { x: vps[i].x, y: vps[i].y, width: vps[i].width, height: vps[i].height };
+  }
+  goodCount = n;
+  drawEyes(n, (i) => eyes[i].setFromView(views[i]));
+}
+
+// ---- flat fallback loop ------------------------------------------------------------------
+function monoTick() {
+  renderer.clear();
+  renderer.setViewport(0, 0, canvas.width, canvas.height);
+  renderer.render(scene, monoCam);
+}
+
+// ---- 2D / 3D toggle ----------------------------------------------------------------------
+// 2D = the display's 1-view mode: lens off, nothing woven, full-resolution flat image.
+// 3D = the 2-view mode: lens on, stereo pair woven. Display-wide, eased by the SDK.
+const modeEl = document.getElementById('mode');
+const btn2d = modeEl.querySelector('[data-mode="2d"]');
+const btn3d = modeEl.querySelector('[data-mode="3d"]');
+let wall = null, handle = null, busy = false;
+const setModeUI = (is3d) => {
+  btn2d.setAttribute('aria-pressed', String(!is3d));
+  btn3d.setAttribute('aria-pressed', String(is3d));
+};
+const setButtonsEnabled = (on) => { btn2d.disabled = btn3d.disabled = !on; };
+
+// Pick the mode ourselves rather than via wall.setStereoEnabled(): that sugar takes the FIRST
+// 2-view mode listed, which on some panels is a woven mode with the lens left off. For 3D we
+// want a 2-view mode whose hardwareDisplay3D is true (lens on) — preferably the one the display
+// was in when the page loaded; for 2D a 1-view mode with the lens off.
+let home3D = -1;
+function pickMode(modes, want3d) {
+  const ok = (m) => m.isRequestable;
+  if (want3d) {
+    return modes.find((m) => m.modeIndex === home3D && ok(m))
+      || modes.find((m) => ok(m) && m.viewCount === 2 && m.hardwareDisplay3D)
+      || modes.find((m) => ok(m) && m.viewCount === 2);
+  }
+  return modes.find((m) => ok(m) && m.viewCount === 1 && !m.hardwareDisplay3D)
+    || modes.find((m) => ok(m) && m.viewCount === 1);
+}
+async function setStereo(on) {
+  if (!wall?.supported || busy) return;
+  busy = true;
+  setButtonsEnabled(false);
+  try {
+    const modes = await wall.getRenderingModes();
+    const mode = pickMode(modes, on);
+    debug(modes, `request ${on ? '3D' : '2D'} -> mode ${mode ? mode.modeIndex : 'none'}`);
+    if (!mode) throw new Error(`no requestable ${on ? '3D' : '2D'} mode`);
+    if (on && mode.isActive) {
+      // The runtime already counts the 3D mode as active, so asking for it again is a no-op and
+      // the hardware stays wherever it is — including stuck in 2D (lens off) when an earlier page
+      // went 2D and was closed without coming back. Go through 2D first so the browser owns the
+      // flat state, then return: that path is what switches the hardware (and lens) back to 3D.
+      const flat = pickMode(modes, false);
+      if (flat) {
+        debug(null, `3D mode already active (hw ${wall.hardwareDisplayState ?? '?'}) -> via 2D mode ${flat.modeIndex}`);
+        await wall.requestRenderingMode(flat.modeIndex);
+        await waitForViewCount(1, 3000);
+      }
+    }
+    await wall.requestRenderingMode(mode.modeIndex);
+  } catch (e) { console.error('display mode switch failed', e); debug(null, `error: ${e.message}`); }
+  finally { busy = false; setButtonsEnabled(true); }
+}
+
+// Resolve once the active mode delivers `n` views (or after `ms`, whichever comes first).
+function waitForViewCount(n, ms) {
+  return new Promise((resolve) => {
+    if (viewCount === n) return resolve(true);
+    const t0 = performance.now();
+    const poll = () => {
+      if (viewCount === n) return resolve(true);
+      if (performance.now() - t0 > ms) return resolve(false);
+      setTimeout(poll, 50);
+    };
+    poll();
+  });
+}
+
+// Never leave the panel stuck flat: going away while in 2D puts the display back in 3D.
+addEventListener('pagehide', () => {
+  if (wall?.supported && viewCount === 1 && home3D >= 0) {
+    try { wall.requestRenderingMode(home3D); } catch {}
+  }
+});
+
+// ?debug: on-screen readout of the display's modes and the last request/event.
+const DEBUG = q.has('debug');
+const dbgEl = DEBUG ? Object.assign(document.body.appendChild(document.createElement('div')), { id: 'dbg' }) : null;
+let dbgModes = '', dbgLog = [];
+function debug(modes, msg) {
+  if (!DEBUG) return;
+  if (modes) dbgModes = modes.map((m) =>
+    `${m.isActive ? '*' : ' '}#${m.modeIndex} ${(m.name ?? m.modeName ?? '').padEnd(14)} views=${m.viewCount}` +
+    ` hw3D=${m.hardwareDisplay3D ? 'yes' : 'no '} req=${m.isRequestable ? 'yes' : 'no'}`).join('\n');
+  if (msg) { dbgLog.unshift(`${new Date().toTimeString().slice(0, 8)} ${msg}`); dbgLog.length = Math.min(dbgLog.length, 8); }
+  dbgEl.textContent = `hw state: ${wall?.hardwareDisplayState ?? '?'}\n${dbgModes}\n---\n${dbgLog.join('\n')}`;
+}
+btn2d.addEventListener('click', () => setStereo(false));
+btn3d.addEventListener('click', () => setStereo(true));
+
+async function syncMode() {
+  const modes = await wall.getRenderingModes();
+  const active = modes.find((m) => m.isActive);
+  debug(modes, `modes read, active #${active ? active.modeIndex : '-'}`);
+  if (!active) return;
+  if (home3D < 0 && active.viewCount === 2 && active.hardwareDisplay3D) home3D = active.modeIndex;
+  viewCount = active.viewCount;
+  viewScale = { x: active.viewScaleX || 1, y: active.viewScaleY || 1 };
+  setModeUI(active.viewCount >= 2);
+  if (sizeStore()) replayLastGood();
+}
+
+// ---- boot --------------------------------------------------------------------------------
+addEventListener('keydown', (e) => {
+  const k = e.key;
+  if (k === '=' || k === '+') state.depth = Math.min(state.depth * 1.15, 8);
+  else if (k === '-') state.depth = Math.max(state.depth / 1.15, 0.1);
+  else if (k === 'l') state.lightMode = (state.lightMode + 1) % lights.length;
+  else if (k === 't') { setStereo(btn2d.getAttribute('aria-pressed') === 'true'); return; }
+  else if (k === 'h') { const h = document.getElementById('hud'); h.hidden = !h.hidden; return; }
+  else return;
+  apply();
+});
+
+const rigScratch = {};
+const pushRig = () => {
+  if (handle && inline3dViewRigSupported())
+    handle.setViewRig(displayRig({ virtualDisplayHeight: portalHeight(), out: rigScratch }));
+};
+
+wall = await createInline3D({ lazy: false });
+if (!wall.supported) {
+  // Not the DisplayXR Browser (or no 3D display): plain flat page.
+  setModeUI(false);
+  setButtonsEnabled(false);
+  modeEl.title = 'Needs the DisplayXR Browser on a 3D display';
+  sizeStore();
+  addEventListener('resize', sizeStore);
+  renderer.setAnimationLoop(monoTick);
+} else {
+  sbs = true;
+  sizeStore();
+  wall.session.updateRenderState({ depthNear: 0.01, depthFar: 20 });
+  handle = wall.addScene(canvas, onFrame, { virtualDisplayHeight: portalHeight() });
+  pushRig();
+  addEventListener('resize', () => { pushRig(); if (sizeStore()) replayLastGood(); });
+
+  if (inline3dDisplayModesSupported()) {
+    wall.on('renderingmodechange', () => syncMode().catch(console.error));
+    wall.on('hardwaredisplaystatechange', (ev) => {
+      debug(null, `event hardwaredisplaystatechange -> ${ev.state}`);
+      if (ev.state) setModeUI(ev.state === '3d');
+    });
+    await syncMode().catch(console.error);
+    // A previous page may have left the hardware in 2D (lens off) while the runtime still lists
+    // the 3D mode as active. If the display reports flat, bring it back to 3D.
+    if (wall.hardwareDisplayState === '2d' && viewCount === 2) setStereo(true);
+  } else {
+    setButtonsEnabled(false);
+    modeEl.title = 'This browser version cannot switch display modes';
+  }
+}
+</script>
+</body>
+</html>
