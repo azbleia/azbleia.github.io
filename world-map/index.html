@@ -23,6 +23,10 @@
   #mode button[aria-pressed="true"] { background: var(--fg); color: #0b1a17; }
   #mode button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
   #mode button:disabled { opacity: .45; cursor: not-allowed; }
+  /* Auto-hiding UI: shown on mouse/keyboard/touch activity, fades out after a few idle seconds. */
+  #hud, #mode, #credit { transition: opacity .4s ease; }
+  body.idle #hud, body.idle #mode, body.idle #credit { opacity: 0; pointer-events: none; }
+  body.idle { cursor: none; }
   #credit { position: fixed; left: 16px; bottom: 16px; color: var(--fg); font-size: calc(var(--ui) * .85);
     background: rgba(2,10,9,.78); padding: .3em .7em; border-radius: 8px; }
   #credit a { color: var(--fg); }
@@ -281,6 +285,24 @@ async function syncMode() {
   viewScale = { x: active.viewScaleX || 1, y: active.viewScaleY || 1 };
   if (sizeStore()) replayLastGood();
 }
+
+// ---- auto-hide UI -------------------------------------------------------------------------
+// The HUD and the 2D/3D toggle appear on activity and fade after IDLE_MS. They stay up while
+// the pointer is over the toggle or it has keyboard focus. The image credit hides with them.
+const IDLE_MS = 2500;
+let idleTimer = 0;
+const isEngaged = () => modeEl.matches(":hover") || document.getElementById("credit").matches(":hover") || !!modeEl.querySelector(':focus-visible');
+function wake() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(function sleep() {
+    if (isEngaged()) { idleTimer = setTimeout(sleep, IDLE_MS); return; }
+    document.body.classList.add('idle');
+  }, IDLE_MS);
+}
+for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'])
+  addEventListener(ev, wake, { passive: true });
+wake();
 
 // ---- boot --------------------------------------------------------------------------------
 addEventListener('keydown', (e) => {
