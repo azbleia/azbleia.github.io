@@ -14,15 +14,19 @@
   #hud { position: fixed; left: 16px; top: 16px; right: 16px; width: fit-content; color: var(--muted); pointer-events: none;
     background: rgba(2,10,9,.78); padding: .55em .9em; border-radius: 10px; text-shadow: 0 1px 2px #000; }
   #hud b { color: var(--fg); font-weight: 700; }
-  #mode { position: fixed; right: 16px; bottom: 16px; display: flex; padding: 5px; gap: 4px;
+  #mode { position: fixed; left: 50%; transform: translateX(-50%); bottom: max(72px, 8vh); display: flex; padding: 10px; gap: 8px;
     background: rgba(2,10,9,.82); border: 2px solid rgba(241,232,210,.45); border-radius: 999px;
-    font-size: calc(var(--ui) * 1.35); }
+    font-size: calc(var(--ui) * 2.7); }
   #mode button { all: unset; cursor: pointer; padding: .4em 1.1em; min-width: 2.2em; text-align: center;
     border-radius: 999px; color: var(--fg); font-weight: 700; letter-spacing: .05em; }
   #mode button:hover { background: rgba(241,232,210,.15); }
   #mode button[aria-pressed="true"] { background: var(--fg); color: #0b1a17; }
   #mode button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
   #mode button:disabled { opacity: .45; cursor: not-allowed; }
+  /* With the 3D buttons drawn in the scene, the DOM toggle stays only as the invisible hit target
+     (layout, hover, click, keyboard). Its focus ring stays visible for keyboard users. */
+  #mode.in-scene { background: transparent; border-color: transparent; }
+  #mode.in-scene button { color: transparent; background: transparent !important; padding-left: 2.3em; }
   /* Auto-hiding UI: shown on mouse/keyboard/touch activity, fades out after a few idle seconds. */
   #hud, #mode, #credit { transition: opacity .4s ease; }
   body.idle #hud, body.idle #mode, body.idle #credit { opacity: 0; pointer-events: none; }
@@ -57,6 +61,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createInline3D, inline3dDisplayModesSupported, inline3dViewRigSupported } from '@displayxr/inline3d';
 import { EyeCamera, displayRig } from '@displayxr/inline3d/three';
 
@@ -80,7 +85,6 @@ renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.shadowMap.autoUpdate = false;  // static scene: re-render shadows only when something changes
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x04100f);
@@ -95,6 +99,7 @@ key.shadow.mapSize.set(4096, 4096);
 key.shadow.bias = -0.0002;
 key.shadow.normalBias = 0.0008;
 key.shadow.radius = 3;
+key.shadow.autoUpdate = false;   // static scene: re-render its shadows only when something changes
 const fill = new THREE.HemisphereLight(0x9fd6cf, 0x0a1a18, 0.35);
 scene.add(key, key.target, fill);
 
@@ -115,7 +120,9 @@ function apply() {
   const s = key.shadow.camera, h = MAP_W * 0.6;
   s.left = -h; s.right = h; s.top = h; s.bottom = -h; s.near = 0.05; s.far = 3;
   s.updateProjectionMatrix();
-  renderer.shadowMap.needsUpdate = true;
+  key.shadow.needsUpdate = true;
+  uiKey?.position.copy(key.position);
+  if (uiKey) uiKey.intensity = li;
   document.getElementById('d').textContent = `(${state.depth.toFixed(2)}×)`;
 }
 apply();
@@ -176,6 +183,7 @@ let goodCount = 0;
 let viewCount = 2;              // views the active rendering mode delivers (1 in 2D mode)
 
 function drawEyes(n, setEye) {
+  updateButtons3D(performance.now());
   renderer.clear();
   renderer.setScissorTest(true);
   for (let i = 0; i < n; i++) {
@@ -184,6 +192,10 @@ function drawEyes(n, setEye) {
     renderer.setScissor(vp.x, vp.y, vp.width, vp.height);
     setEye(i);
     renderer.render(scene, eyes[i].camera);
+    renderer.clearDepth();
+    // The UI always uses the real head-tracked eye, so it stays 3D when the map goes 2D.
+    eyes[i].setFromMatrices(good[i].proj, good[i].pose);
+    renderer.render(uiScene, eyes[i].camera);
   }
   renderer.setScissorTest(false);
 }
@@ -251,9 +263,12 @@ function onFrame(views, layer) {
 
 // ---- flat fallback loop ------------------------------------------------------------------
 function monoTick() {
+  updateButtons3D(performance.now());
   renderer.clear();
   renderer.setViewport(0, 0, canvas.width, canvas.height);
   renderer.render(scene, monoCam);
+  renderer.clearDepth();
+  renderer.render(uiScene, monoCam);
 }
 
 // ---- 2D / 3D toggle ----------------------------------------------------------------------
@@ -275,6 +290,246 @@ function setStereo(on) {
 }
 btn2d.addEventListener('click', () => setStereo(false));
 btn3d.addEventListener('click', () => setStereo(true));
+
+// ---- 3D buttons ---------------------------------------------------------------------------
+// The 2D/3D toggle drawn as real geometry so it has depth on the panel: a hovered button rises
+// out of the glass, a pressed one sinks into it. Each pill tracks its (invisible) DOM button's
+// rect, mapped onto the portal plane z = 0, where screen position is the same for both eyes.
+const BTN = { rest: 0.002, hover: 0.006, press: -0.0005, thick: 0.004, ease: 14, labelLift: 0.0065 };
+const COL = { fg: '#f1e8d2', bg: '#0b1a17', sel: '#5f968c', unsel: '#365650', bodyOpacity: 0.75 };  // same hue: unsel = base x2, sel = base x3.5 (base #1b2b28)
+// The buttons live in their own scene, drawn over the map with a matching key light (no shadow
+// maps), so the map's relief, which stands taller than the buttons, never shadows them.
+const uiScene = new THREE.Scene();
+uiScene.environment = scene.environment;
+uiScene.environmentIntensity = scene.environmentIntensity;
+var uiKey = new THREE.DirectionalLight(0xfff1dc, key.intensity);
+uiKey.position.copy(key.position);
+uiScene.add(uiKey, uiKey.target, fill.clone());
+const uiGroup = new THREE.Group();
+uiScene.add(uiGroup);
+// A pill whose front face is a shallow bowl: the rim stays at the front, the face curves down
+// to a flat floor BOWL deep (fraction of the thickness). Unit height, unit depth centred on
+// z = 0; built from concentric stadium rings so the face can curve (an extruded cap can't).
+const BOWL = 0.5;
+const bowlCache = new Map();
+function stadiumPoint(a, r, u, out) {
+  // Point at parameter u in [0,1) around a stadium of half-straight length a and end radius r.
+  const L = 4 * a + 2 * Math.PI * r;
+  let s = u * L;
+  if (s < 2 * a) return out.set(-a + s, -r);
+  s -= 2 * a;
+  if (s < Math.PI * r) { const t = -Math.PI / 2 + s / r; return out.set(a + r * Math.cos(t), r * Math.sin(t)); }
+  s -= Math.PI * r;
+  if (s < 2 * a) return out.set(a - s, r);
+  s -= 2 * a;
+  const t = Math.PI / 2 + s / r;
+  return out.set(-a + r * Math.cos(t), r * Math.sin(t));
+}
+function bowlGeo(ratio) {
+  const key = Math.max(1, ratio).toFixed(2);
+  if (bowlCache.has(key)) return bowlCache.get(key);
+  const w = +key, a = (w - 1) / 2, R = 0.5, M = 96, RINGS = 14;
+  const pos = [], idx = [], v = new THREE.Vector2();
+  const ring = (r, z) => { const start = pos.length / 3; for (let i = 0; i < M; i++) { stadiumPoint(a, r, i / M, v); pos.push(v.x, v.y, z); } return start; };
+  const stitch = (s0, s1, flip) => {
+    for (let i = 0; i < M; i++) {
+      const j = (i + 1) % M, A = s0 + i, B = s0 + j, C = s1 + i, D = s1 + j;
+      if (flip) idx.push(A, C, B, B, C, D); else idx.push(A, B, C, B, D, C);
+    }
+  };
+  // Front bowl: rings from the rim (z = +0.5) inward; depth eases to the flat floor by halfway.
+  const bowlZ = (t) => 0.5 - BOWL * (t >= 0.5 ? 1 : (1 - Math.cos(Math.PI * t / 0.5)) / 2);
+  let prev = ring(R, 0.5);
+  const rim = prev;
+  for (let k = 1; k <= RINGS; k++) {
+    // The last ring has zero radius: it collapses onto the centre line, closing the face.
+    const t = k / RINGS, cur = ring(R * (1 - t), bowlZ(t));
+    stitch(prev, cur, false);
+    prev = cur;
+  }
+  // Side wall down to the back, then a flat back cap.
+  const back = ring(R, -0.5);
+  stitch(back, rim, false);
+  const capC = pos.length / 3; pos.push(0, 0, -0.5);
+  for (let i = 0; i < M; i++) idx.push(capC, back + ((i + 1) % M), back + i);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // The floor is flat: point its normals straight out (the collapsed centre ring would otherwise
+  // average to bad normals along the middle of the button).
+  const floorZ = 0.5 - BOWL, nrm = g.attributes.normal;
+  for (let i = 0; i < nrm.count; i++) if (Math.abs(pos[i * 3 + 2] - floorZ) < 1e-6) nrm.setXYZ(i, 0, 0, 1);
+  bowlCache.set(key, g);
+  return g;
+}
+// Drawn in their own pass after a depth clear: always over the map, still depth-sorted among themselves.
+const onTop = (m, order) => { m.renderOrder = order; m.material.transparent = true; return m; };
+
+function labelTexture(text, selected, shadow = false) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 128;
+  const g = c.getContext('2d');
+  g.font = '700 64px system-ui, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = shadow ? '#2a2a2a' : selected ? COL.bg : COL.fg;
+  if (shadow) g.filter = 'blur(3px)';
+  g.fillText(text, 128, 68);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+const pills = [btn2d, btn3d].map((el) => {
+  const text = el.textContent.trim();
+  const body = onTop(new THREE.Mesh(bowlGeo(2),
+    new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0 })), 11);
+  const label = onTop(new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ toneMapped: false })), 12);
+  // Text and icons stay light on both buttons, selected or not (the pills are see-through).
+  const lightWhenSelected = true;
+  const tex = { on: labelTexture(text, !lightWhenSelected), off: labelTexture(text, false) };
+  // Each button's label lifts off the pill on hover. Its "shadow" is the same text in soft dark
+  // grey lying flat on the pill directly beneath it, faded in as the label rises.
+  const liftLabel = true;
+  let shade = null;
+  if (liftLabel) {
+    shade = onTop(new THREE.Mesh(label.geometry, new THREE.MeshBasicMaterial({
+      map: labelTexture(text, false, true), toneMapped: false, depthWrite: false, opacity: 0 })), 12);
+    label.renderOrder = 13;
+    uiGroup.add(shade);
+  }
+  const p = { el, body, label, shade, tex, liftLabel, lightWhenSelected, hover: false, press: false, z: BTN.rest, lift: 0, selected: null };
+  el.addEventListener('pointerenter', () => { p.hover = true; });
+  el.addEventListener('pointerleave', () => { p.hover = false; p.press = false; });
+  el.addEventListener('pointerdown', () => { p.press = true; });
+  for (const ev of ['pointerup', 'pointercancel']) el.addEventListener(ev, () => { p.press = false; });
+  el.addEventListener('keydown', (e) => { if (e.key === ' ' || e.key === 'Enter') p.press = true; });
+  el.addEventListener('keyup', () => { p.press = false; });
+  uiGroup.add(body, label);
+  return p;
+});
+modeEl.classList.add('in-scene');
+
+// ---- button icons ----------------------------------------------------------------------------
+// 2D gets an outline square, 3D an outline cube; both spin on a tilted axis, standing out of
+// the button face. Edges are thin bars, not GL lines (1 px, too thin for the lens).
+// Unit size, scaled per frame to the button.
+const ICON = { edge: 0.09, spin: 0.9, tilt: 0.5 };
+function cubeEdgesGeo(t) {
+  const parts = [], h = 0.5;
+  for (const axis of [0, 1, 2]) for (const a of [-h, h]) for (const b of [-h, h]) {
+    const size = [t, t, t]; size[axis] = 1 + t;
+    const g = new THREE.BoxGeometry(...size);
+    const pos = [a, b]; pos.splice(axis, 0, 0);
+    g.translate(...pos);
+    parts.push(g);
+  }
+  return mergeGeometries(parts);
+}
+function squareEdgesGeo(t) {
+  const h = 0.5, parts = [];
+  for (const [w, hh, x, y] of [[1 + t, t, 0, h], [1 + t, t, 0, -h], [t, 1 + t, h, 0], [t, 1 + t, -h, 0]]) {
+    const g = new THREE.BoxGeometry(w, hh, t);
+    g.translate(x, y, 0);
+    parts.push(g);
+  }
+  return mergeGeometries(parts);
+}
+const iconMat = () => new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.1, emissiveIntensity: 0.25 });
+// Icons lift on hover like the labels. Each has a "shadow": the same shape in flat dark grey,
+// squashed onto the button floor directly beneath it (the cube's spins in step with it).
+const shadeMat = () => new THREE.MeshBasicMaterial({ color: 0x2a2a2a, toneMapped: false, depthWrite: false, opacity: 0 });
+for (const p of pills) {
+  const cube = p.el === btn3d, geo = cube ? cubeEdgesGeo(ICON.edge) : squareEdgesGeo(ICON.edge);
+  const build = (mat, order) => {
+    const mesh = onTop(new THREE.Mesh(geo, mat), order);
+    const spin = new THREE.Group(), tilt = new THREE.Group();
+    tilt.rotation.x = ICON.tilt;
+    spin.add(mesh); tilt.add(spin);
+    return { root: tilt, mesh, spin };
+  };
+  const icon = build(iconMat(), 13), shade = build(shadeMat(), 12);
+  // Icons draw over their button regardless of depth, so a turning edge never clips into the face.
+  icon.mesh.material.depthTest = false;
+  p.isCube = cube;
+  p.icon = icon.mesh; p.iconRoot = icon.root; p.iconSpin = icon.spin;
+  p.iconShade = shade.mesh; p.iconShadeSpin = shade.spin;
+  p.iconShadeRoot = new THREE.Group();     // flattens the shadow onto the floor
+  p.iconShadeRoot.add(shade.root);
+  uiGroup.add(p.iconRoot, p.iconShadeRoot);
+}
+const textRange = document.createRange();
+function textRect(el) { textRange.selectNodeContents(el); return textRange.getBoundingClientRect(); }
+
+let uiAlpha = 1, uiLast = 0;
+function updateButtons3D(now) {
+  const dt = uiLast ? Math.min(0.1, (now - uiLast) / 1000) : 0;
+  uiLast = now;
+  const k = 1 - Math.exp(-BTN.ease * dt);
+  const cw = canvas.clientWidth || 1, ch = canvas.clientHeight || 1;
+  const H = portalHeight(), W = H * aspect(), u = H / ch;          // scene units per CSS px
+  const toScene = (r) => ({ x: (r.left + r.width / 2) / cw * W - W / 2,
+                            y: H / 2 - (r.top + r.height / 2) / ch * H, w: r.width * u, h: r.height * u });
+  // Fade with the rest of the UI.
+  const target = document.body.classList.contains('idle') ? 0 : 1;
+  uiAlpha += (target - uiAlpha) * (1 - Math.exp(-6 * dt));
+  uiGroup.visible = uiAlpha > 0.01;
+  if (!uiGroup.visible) return;
+
+
+  for (const p of pills) {
+    const r = toScene(p.el.getBoundingClientRect());
+    const disabled = p.el.disabled;
+    const goal = disabled ? BTN.rest : p.press ? BTN.press : (p.hover || p.el.matches(':focus-visible')) ? BTN.hover : BTN.rest;
+    const hovered = !disabled && !p.press && (p.hover || p.el.matches(':focus-visible'));
+    const liftGoal = p.liftLabel && hovered ? BTN.labelLift : 0;
+    p.z += (goal - p.z) * k;
+    p.lift += (liftGoal - p.lift) * k;
+    const sel = p.el.getAttribute('aria-pressed') === 'true';
+    if (sel !== p.selected) {
+      p.selected = sel;
+      p.body.material.color.set(sel ? COL.sel : COL.unsel);
+      p.label.material.map = sel ? p.tex.on : p.tex.off;
+      p.label.material.needsUpdate = true;
+      const ink = sel && !p.lightWhenSelected ? COL.bg : COL.fg;
+      p.icon.material.color.set(ink);
+      p.icon.material.emissive.set(ink);
+    }
+    const a = uiAlpha * (disabled ? 0.45 : 1);
+    p.body.geometry = bowlGeo(r.w / r.h);
+    p.body.position.set(r.x, r.y, p.z);
+    p.body.scale.set(r.h, r.h, BTN.thick);
+    p.body.material.opacity = a * COL.bodyOpacity;   // 25% see-through pills; text and icons stay solid
+    // Label on the pill's front face; the texture is 2:1, so fit it to the pill's height.
+    const face = p.z + BTN.thick * (0.5 - BOWL);   // floor of the bowl
+    const tr = toScene(textRect(p.el)), el = p.el.getBoundingClientRect();
+    const lx = tr.x, ix = toScene({ left: el.left + 0.6 * el.height, width: 0, top: el.top, height: el.height }).x;
+    p.label.position.set(lx, r.y, face + 0.0003 + p.lift);
+    // Icon: 2D square flat on the face; 3D cube spinning, standing out of the face.
+    const isz = r.h * 0.42;
+    // Both icons spin; the cube stands taller off the face than the (flat) square.
+    p.iconSpin.rotation.y += dt * ICON.spin;
+    p.iconShadeSpin.rotation.y = p.iconSpin.rotation.y;
+    const isc = isz * (p.isCube ? 0.85 : 1);
+    p.iconRoot.position.set(ix, r.y, face + isc * (p.isCube ? 0.88 : 0.55) + p.lift);
+    p.iconRoot.scale.setScalar(isc);
+    p.iconShadeRoot.scale.set(isc, isc, 1e-4);
+    p.iconShadeRoot.position.set(ix, r.y, face + 0.0001);
+    p.icon.material.opacity = a;
+    p.iconShade.material.opacity = a * (p.isCube ? 0.25 : 0.55) * (p.lift / BTN.labelLift);  // cube's lighter
+    p.iconShadeRoot.visible = p.iconShade.material.opacity > 0.005;
+    if (p.shade) {
+      // Directly beneath the lifted label, flat on the face.
+      p.shade.position.set(lx, r.y, face + 0.0001);
+      p.shade.scale.set(r.h * 2 * 0.9, r.h * 0.9, 1);
+      p.shade.material.opacity = a * 0.55 * (p.lift / BTN.labelLift);
+      p.shade.visible = p.shade.material.opacity > 0.005;
+    }
+    p.label.scale.set(r.h * 2 * 0.9, r.h * 0.9, 1);
+    p.label.material.opacity = a;
+  }
+}
 
 // Keep the backing store matched to the active rendering mode's recommended view scale.
 async function syncMode() {
