@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Relief World Map</title>
+<title>World Map</title>
 <style>
   :root { --bg: #04100f; --fg: #f1e8d2; --muted: #c9d4cf; --ui: clamp(16px, 1.25vw, 24px); }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); overflow: hidden;
@@ -39,20 +39,31 @@
   #load { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); color: var(--muted);
     background: rgba(2,10,9,.78); padding: .5em 1em; border-radius: 10px; }
 </style>
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
-  "@displayxr/inline3d": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.34.0/js/inline3d.js",
-  "@displayxr/inline3d/three": "https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.34.0/js/inline3d-three.js"
-} }
+<script>
+// Import map. ?cursor=sdk loads the SDK from the depth-cursor branch build (DisplayXR/displayxr-web
+// PR #141, pinned commit) to try its DepthCursor; otherwise the released SDK.
+{
+  const sdkCursor = new URLSearchParams(location.search).get('cursor') === 'sdk';
+  const dxr = sdkCursor
+    ? 'https://cdn.jsdelivr.net/gh/DisplayXR/displayxr-web@40227645c3c0fd77873d66b9531cb50c2826dae9/js/'
+    : 'https://cdn.jsdelivr.net/npm/@displayxr/inline3d@1.34.0/js/';
+  const im = document.createElement('script');
+  im.type = 'importmap';
+  im.textContent = JSON.stringify({ imports: {
+    'three': 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js',
+    'three/addons/': 'https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/',
+    '@displayxr/inline3d': dxr + 'inline3d.js',
+    '@displayxr/inline3d/three': dxr + 'inline3d-three.js',
+  } });
+  document.currentScript.after(im);
+}
 </script>
 </head>
 <body>
 <canvas id="stage"></canvas>
 <div id="load">Loading map…</div>
 <div id="hud">
-  <b>− / =</b> depth <span id="d"></span> · <b>L</b> light · <b>T</b> 2D/3D · <b>H</b> hide
+  <b>− / =</b> depth <span id="d"></span> · <b>L</b> light · <b>T</b> 2D/3D · <b>C</b> cursor <span id="anchor"></span> · <b>H</b> hide
 </div>
 <div id="credit"><a href="https://www.vecteezy.com/photo/71161499-detailed-world-map-is-shown-with-beige-continents-and-a-turquoise-sea-background" target="_blank" rel="noopener">World map photo by Vecteezy</a></div>
 <div id="mode" role="group" aria-label="Display mode">
@@ -65,7 +76,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createInline3D, inline3dDisplayModesSupported, inline3dViewRigSupported } from '@displayxr/inline3d';
-import { EyeCamera, displayRig } from '@displayxr/inline3d/three';
+import * as dxrThree from '@displayxr/inline3d/three';
+const { EyeCamera, displayRig } = dxrThree;   // DepthCursor only exists in the ?cursor=sdk build
 
 const q = new URLSearchParams(location.search);
 const canvas = document.getElementById('stage');
@@ -77,7 +89,11 @@ const MAP_W = 0.4;
 const MAP_ASPECT = 2000 / 1121;
 const RELIEF = 0.035;      // relief.glb height / width, from build.py --relief
 const FOCUS = 0.4;         // fraction of the relief that sits behind the glass
-const state = { depth: +(q.get('depth') ?? 1.0), lightMode: 0 };
+const state = { depth: +(q.get('depth') ?? 1.0), lightMode: 0,
+  // Cursor placement: 'world' = a fixed point in the scene in front of the pointer (real motion
+  // parallax); 'head' = on the line from the eyes through the pointer (DepthCursor's default:
+  // always covers the pointer from the viewer's position, no parallax). C toggles.
+  anchor: q.get('anchor') === 'head' ? 'head' : 'world' };
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(1);              // viewports are backing-store px; we size the store ourselves
@@ -248,7 +264,42 @@ function replayLastGood() {
   stepStereo(performance.now());
   drawEyes(goodCount, (i) => setBlendedEye(i, goodCount));
 }
+// ?debug: every 2 s, report the stereo state to the dev server's access log (a 404 GET whose URL
+// is the message). Eye separation is measured from this frame's two view poses.
+const DEBUG = q.has('debug');
+let dbgT = 0;
+function debugReport(views) {
+  const now = performance.now();
+  if (!DEBUG || now - dbgT < 500) return;
+  dbgT = now;
+  const pose = (v) => (v.transform ? v.transform.matrix : v.transformMatrix);
+  let sep = -1, eye0 = [];
+  if (views && views.length >= 2) {
+    const a = pose(views[0]), b = pose(views[1]);
+    sep = Math.hypot(a[12] - b[12], a[13] - b[13], a[14] - b[14]);
+    eye0 = [a[12], a[13], a[14]].map((x) => +x.toFixed(4));
+  }
+  const info = {
+    views: views ? views.length : 0, sep: +sep.toFixed(5), eye0, stereo: +stereo.toFixed(3), stereoTo,
+    viewCount, hw: wall?.hardwareDisplayState ?? null, tracking: wall?.trackingState ?? null,
+    sdkCursor: !!sdkCursor, nominal: !!nominal, mode3d: btn3d.getAttribute('aria-pressed'),
+    cur: sdkCursor ? { active: sdkCursor.placement.active,
+      d: +(sdkCursor.placement.disparity ?? NaN).toFixed(4), target: +(sdkCursor.placement.targetDisparity ?? NaN).toFixed(4),
+      hitZ: sdkHitZ === null ? null : +sdkHitZ.toFixed(4), uiHits: sdkUiHits,
+      uv: sdkCursor.pointer.uv && sdkCursor.pointer.uv.map((x) => +x.toFixed(3)),
+      hover: pills.map((p) => p.hover), uiVisible: uiGroup.visible } : null,
+  };
+  fetch('/__dbg?' + encodeURIComponent(JSON.stringify(info))).catch(() => {});
+}
 function onFrame(views, layer) {
+  debugReport(views);
+  if (sdkCursor && views && views.length >= 2) {
+    sdkUiHits = 0;
+    sdkCursor.update(views);
+    if (sdkCursor.placement.active && state.anchor === 'world') anchorSdkCursor();
+    // It hides the CSS cursor on the canvas only; hide it page-wide (buttons too) while it shows.
+    document.documentElement.classList.toggle('cursor3d', !!sdkCursor.placement.active);
+  }
   // Validate everything before clearing: a short view list or a null viewport must replay the
   // last good frame, never leave a black or stale canvas for the weave to read.
   const need = Math.min(viewCount, 2);
@@ -266,6 +317,10 @@ function onFrame(views, layer) {
     good[i].vp = { x: vps[i].x, y: vps[i].y, width: vps[i].width, height: vps[i].height };
   }
   goodCount = n;
+  if (n >= 2) {
+    const a = good[0].pose, b = good[1].pose;
+    eyeMid = [(a[12] + b[12]) / 2, (a[13] + b[13]) / 2, (a[14] + b[14]) / 2];
+  }
   stepStereo(performance.now());
   drawEyes(n, (i) => setBlendedEye(i, n));
 }
@@ -499,15 +554,15 @@ addEventListener('pointermove', (e) => { cursorState.x = e.clientX; cursorState.
 document.documentElement.addEventListener('pointerleave', () => { cursorState.inside = false; });
 
 // Map surface height (scene z) at scene point (x, y): the highest vertex in a small window.
-function mapHeightAt(x, y) {
+function mapHeightAt(x, y, win = 3) {
   if (!heightGrid) return 0;
   const { pa, gw, gh } = heightGrid, hL = MAP_ASPECT ? 1 / MAP_ASPECT : 0.56;
   const lx = x / map.scale.x, ly = y / map.scale.y;
   const col = Math.round((lx + 0.5) * (gw - 1)), row = Math.round((0.5 - ly / hL) * (gh - 1));
   let zMax = -Infinity;
-  for (let r = row - 3; r <= row + 3; r++) {
+  for (let r = row - win; r <= row + win; r++) {
     if (r < 0 || r >= gh) continue;
-    for (let c = col - 3; c <= col + 3; c++) {
+    for (let c = col - win; c <= col + win; c++) {
       if (c < 0 || c >= gw) continue;
       zMax = Math.max(zMax, pa[(r * gw + c) * 3 + 2]);
     }
@@ -516,12 +571,37 @@ function mapHeightAt(x, y) {
   return map.position.z + zMax * map.scale.z;
 }
 
+// World-space bounding box of a button's icon as currently posed (it spins and lifts).
+const _iconBoxes = new Map();
+function iconBox(p) {
+  let b = _iconBoxes.get(p);
+  if (!b) _iconBoxes.set(p, (b = new THREE.Box3()));
+  p.iconRoot.updateWorldMatrix(true, true);
+  return b.setFromObject(p.iconRoot);
+}
+
+// The help text and the photo credit are flat DOM drawn over the woven canvas, so a 3D cursor
+// would vanish under them. Over those, hand back the flat OS pointer: it sits at the glass, the
+// same depth as that UI, so there is no conflict there.
+const flatUi = [document.getElementById('hud'), document.getElementById('credit')];
+function overFlatUi(cx, cy) {
+  if (document.body.classList.contains('idle')) return false;
+  return flatUi.some((el) => {
+    if (!el || el.hidden) return false;
+    const r = el.getBoundingClientRect();
+    return cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom;
+  });
+}
+
+let eyeMid = null;                     // midpoint of the viewer's eyes, this frame (scene space)
 let cursorLast = 0;
 function updateCursor3D(now) {
   const dt = cursorLast ? Math.min(0.1, (now - cursorLast) / 1000) : 0;
   cursorLast = now;
   const idle = document.body.classList.contains('idle');
-  cursor3d.visible = cursorState.active && cursorState.inside && !idle;
+  const flat = cursorState.active && overFlatUi(cursorState.x, cursorState.y);
+  if (cursorState.active) document.documentElement.classList.toggle('cursor3d', !flat);
+  cursor3d.visible = cursorState.active && cursorState.inside && !idle && !flat;
   if (!cursor3d.visible) return;
   const cw = canvas.clientWidth || 1, ch = canvas.clientHeight || 1;
   const H = portalHeight(), W = H * aspect(), u = H / ch;
@@ -531,12 +611,102 @@ function updateCursor3D(now) {
   let target = mapHeightAt(x, y) * stereo;
   for (const p of pills) {
     if (!p.hover) continue;
-    target = Math.max(target, p.z + BTN.thick / 2 + p.lift + 0.001);
+    // Above the hovered button's highest part: its lifted label or its icon (the cube stands tallest).
+    target = Math.max(target, p.z + BTN.thick / 2 + p.lift + 0.001, iconBox(p).max.z);
   }
   target += CURSOR.gap;
   cursorState.z += (target - cursorState.z) * (1 - Math.exp(-CURSOR.ease * dt));
-  cursor3d.position.set(x, y, cursorState.z);
+  if (state.anchor === 'head' && eyeMid && eyeMid[2] > cursorState.z) {
+    // On the line from the eyes through the pointer's canvas point, at the chosen depth: it covers
+    // the pointer from wherever the viewer is, so it never parallaxes.
+    const t = (eyeMid[2] - cursorState.z) / eyeMid[2];
+    cursor3d.position.set(eyeMid[0] + t * (x - eyeMid[0]), eyeMid[1] + t * (y - eyeMid[1]), cursorState.z);
+  } else {
+    cursor3d.position.set(x, y, cursorState.z);
+  }
   cursor3d.scale.set(CURSOR.px * u, CURSOR.px * u, 1);
+}
+
+// ---- SDK DepthCursor (?cursor=sdk) ------------------------------------------------------------
+// David's opt-in DepthCursor from the depth-cursor branch, in place of the arrow above. Its stock
+// raycastHitTest would cast 18 rays a frame through the 1.6M-triangle relief, so it gets a cheap
+// hit test instead: march each ray down through the relief's height grid, and raycast only the
+// small button meshes. In 2D mode the map is flat on the glass, as the arrow treats it.
+let sdkCursor = null, sdkHitZ = null, sdkUiHits = 0;   // sdkHitZ: last hit depth (debug)
+function heightfieldHit(o, d) {
+  if (!heightGrid) return null;
+  const top = map.position.z + RELIEF * map.scale.z, bottom = map.position.z;
+  if (Math.abs(d[2]) < 1e-6) return null;
+  const k = stereo;                          // map relief as currently shown (0 in 2D)
+  let t0 = (top - o[2]) / d[2], t1 = (bottom - o[2]) / d[2];
+  if (t0 > t1) [t0, t1] = [t1, t0];
+  t0 = Math.max(t0, 0);
+  const steps = 48;
+  for (let i = 0; i <= steps; i++) {
+    const t = t0 + (t1 - t0) * i / steps;
+    const x = o[0] + d[0] * t, y = o[1] + d[1] * t, z = o[2] + d[2] * t;
+    const hz = mapHeightAt(x, y, 0) * k;
+    if (z <= hz) return [x, y, hz];
+  }
+  return null;
+}
+function setupSdkCursor() {
+  const uiTargets = pills.flatMap((p) => [p.body, p.label]);
+  const ray = new THREE.Raycaster(), ro = new THREE.Vector3(), rd = new THREE.Vector3();
+  const boxHit = new THREE.Vector3();
+  const hitTest = (origin, direction) => {
+    const len = Math.hypot(direction[0], direction[1], direction[2]) || 1;
+    const d = [direction[0] / len, direction[1] / len, direction[2] / len];
+    let best = heightfieldHit(origin, d);
+    if (uiGroup.visible) {
+      ray.set(ro.fromArray(origin), rd.fromArray(d));
+      const hit = ray.intersectObjects(uiTargets, false)[0];
+      if (hit) {
+        sdkUiHits++;
+        const p = [hit.point.x, hit.point.y, hit.point.z];
+        if (!best || p[2] > best[2]) best = p;
+      }
+      // The spinning icons stand out further than the label (the cube most): test their bounding
+      // boxes, so rays can't slip between the wireframe bars and leave the cursor behind them.
+      for (const pl of pills) {
+        if (ray.ray.intersectBox(iconBox(pl), boxHit)) {
+          sdkUiHits++;
+          if (!best || boxHit.z > best[2]) best = [boxHit.x, boxHit.y, boxHit.z];
+        }
+      }
+    }
+    if (best) sdkHitZ = best[2];
+    return best;
+  };
+  sdkCursor = new dxrThree.DepthCursor(THREE, { canvas, hitTest });
+  // Rest it nearly on the surface: the default margin (0.03 eye-baseline disparity) floats it
+  // about a centimetre out here; 0.003 matches the arrow's ~1.5 mm. Other tuning unchanged.
+  sdkCursor.placer.tuning = { ...sdkCursor.placer.tuning, margin: +(q.get('margin') ?? 0.003) };
+  uiScene.add(sdkCursor.object);
+  // DepthCursor only tracks pointer events on the canvas, so over the (invisible) HTML buttons
+  // layered on it, it would hide and hand back the flat OS cursor, exactly where the depth
+  // violation is. Feed it the pointer from the whole window instead.
+  addEventListener('pointermove', (e) => {
+    if (overFlatUi(e.clientX, e.clientY)) { sdkCursor.setPointer(null); return; }
+    const r = canvas.getBoundingClientRect();
+    sdkCursor.setPointer((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+  }, { passive: true });
+  document.documentElement.addEventListener('pointerleave', () => sdkCursor.setPointer(null));
+}
+
+// DepthCursor places its sprite on the live cyclopean ray through the pointer, so it stays put on
+// the glass as the head moves: no motion parallax, which reads as "at the screen" and so behind
+// anything popping out. Re-anchor it in the world instead: keep its depth (and size), but put it
+// straight in front of the pointer's point on the canvas, so it parallaxes like the content it
+// sits on. ?anchor=head keeps the SDK's head-locked placement for comparison.
+function anchorSdkCursor() {
+  const uv = sdkCursor.pointer.uv;
+  if (!uv) return;
+  const H = portalHeight(), W = H * aspect();
+  const m = sdkCursor.object.matrix.elements;
+  m[12] = (uv[0] - 0.5) * W;
+  m[13] = (0.5 - uv[1]) * H;
+  sdkCursor.object.matrixWorldNeedsUpdate = true;
 }
 
 const textRange = document.createRange();
@@ -641,6 +811,11 @@ for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'
   addEventListener(ev, wake, { passive: true });
 wake();
 
+function showAnchor() {
+  document.getElementById('anchor').textContent = `(${state.anchor === 'world' ? 'world-fixed' : 'head-locked'})`;
+}
+showAnchor();
+
 // ---- boot --------------------------------------------------------------------------------
 addEventListener('keydown', (e) => {
   const k = e.key;
@@ -648,6 +823,7 @@ addEventListener('keydown', (e) => {
   else if (k === '-') state.depth = Math.max(state.depth / 1.15, 0.1);
   else if (k === 'l') state.lightMode = (state.lightMode + 1) % lights.length;
   else if (k === 't') { setStereo(stereoTo < 1); return; }
+  else if (k === 'c') { state.anchor = state.anchor === 'world' ? 'head' : 'world'; showAnchor(); return; }
   else if (k === 'h') { const h = document.getElementById('hud'); h.hidden = !h.hidden; return; }
   else return;
   apply();
@@ -670,8 +846,11 @@ if (!wall.supported) {
   renderer.setAnimationLoop(monoTick);
 } else {
   sbs = true;
-  cursorState.active = true;
-  document.documentElement.classList.add('cursor3d');
+  if (q.get('cursor') === 'sdk' && dxrThree.DepthCursor) setupSdkCursor();
+  else {
+    cursorState.active = true;
+    document.documentElement.classList.add('cursor3d');
+  }
   sizeStore();
   wall.session.updateRenderState({ depthNear: NEAR, depthFar: FAR });
   handle = wall.addScene(canvas, onFrame, { virtualDisplayHeight: portalHeight() });
