@@ -29,8 +29,17 @@
   #mode.in-scene button { color: transparent; background: transparent !important; padding-left: 2.3em; }
   #mode.in-scene button:focus-visible { outline: none; }   /* the 3D button lifts on keyboard focus instead */
   /* Auto-hiding UI: shown on mouse/keyboard/touch activity, fades out after a few idle seconds. */
-  #hud, #mode, #credit { transition: opacity .4s ease; }
-  body.idle #hud, body.idle #mode, body.idle #credit { opacity: 0; pointer-events: none; }
+  #hud, #mode, #credit, #tune { transition: opacity .4s ease; }
+  body.idle #hud, body.idle #mode, body.idle #credit, body.idle #tune { opacity: 0; pointer-events: none; }
+  /* Help text and the depth slider stack in the top-left corner, so they never collide. */
+  #topleft { position: fixed; left: 16px; top: 16px; right: 16px; display: flex; flex-direction: column;
+    align-items: flex-start; gap: 8px; pointer-events: none; }
+  #topleft > #hud { position: static; }
+  #tune[hidden] { display: none; }
+  #tune { pointer-events: auto; display: flex; align-items: center; gap: .6em;
+    background: rgba(2,10,9,.78); padding: .45em .8em; border-radius: 10px; color: var(--fg); }
+  #tune input { width: 12em; accent-color: #5f968c; }
+  #tune output { min-width: 3.4em; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
   html.idle, html.idle * { cursor: none !important; }
   /* On the 3D display the pointer is drawn in the scene at the depth of what's under it. */
   html.cursor3d, html.cursor3d * { cursor: none !important; }
@@ -63,8 +72,12 @@
 <body>
 <canvas id="stage"></canvas>
 <div id="load">Loading map…</div>
+<div id="topleft">
 <div id="hud">
   <b>− / =</b> depth <span id="d"></span> · <b>L</b> light · <b>T</b> 2D/3D · <b>C</b> cursor <span id="anchor"></span> · <b>H</b> hide
+</div>
+<div id="tune" hidden><label for="uidepth">Button depth</label>
+  <input id="uidepth" type="range" min="0" max="3" step="0.05" value="0.6"><output id="uidepthv" for="uidepth">0.60×</output></div>
 </div>
 <div id="credit"><a href="https://www.vecteezy.com/photo/71161499-detailed-world-map-is-shown-with-beige-continents-and-a-turquoise-sea-background" target="_blank" rel="noopener">World map photo by Vecteezy</a></div>
 <div id="mode" role="group" aria-label="Display mode">
@@ -94,7 +107,9 @@ const state = { depth: +(q.get('depth') ?? 1.0), lightMode: 0,
   // Cursor placement: 'world' = a fixed point in the scene in front of the pointer (real motion
   // parallax); 'head' = on the line from the eyes through the pointer (DepthCursor's default:
   // always covers the pointer from the viewer's position, no parallax). C toggles.
-  anchor: q.get('anchor') === 'head' ? 'head' : 'world' };
+  anchor: q.get('anchor') === 'head' ? 'head' : 'world',
+  // Depth multiplier for the in-scene buttons (stand-out, hover, press, bowl, label lift, icons).
+  uiDepth: 0.6 };
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(1);              // viewports are backing-store px; we size the store ourselves
@@ -585,7 +600,7 @@ function iconBox(p) {
 // The help text and the photo credit are flat DOM drawn over the woven canvas, so a 3D cursor
 // would vanish under them. Over those, hand back the flat OS pointer: it sits at the glass, the
 // same depth as that UI, so there is no conflict there.
-const flatUi = [document.getElementById('hud'), document.getElementById('credit')];
+const flatUi = [document.getElementById('hud'), document.getElementById('credit'), document.getElementById('tune')];
 function overFlatUi(cx, cy) {
   if (document.body.classList.contains('idle')) return false;
   return flatUi.some((el) => {
@@ -614,7 +629,7 @@ function updateCursor3D(now) {
   for (const p of pills) {
     if (!p.hover) continue;
     // Above the hovered button's highest part: its lifted label or its icon (the cube stands tallest).
-    target = Math.max(target, p.z + BTN.thick / 2 + p.lift + 0.001, iconBox(p).max.z);
+    target = Math.max(target, (p.z + BTN.thick / 2 + p.lift + 0.001) * state.uiDepth, iconBox(p).max.z);
   }
   target += CURSOR.gap;
   cursorState.z += (target - cursorState.z) * (1 - Math.exp(-CURSOR.ease * dt));
@@ -728,6 +743,7 @@ function updateButtons3D(now) {
   uiAlpha += (target - uiAlpha) * (1 - Math.exp(-6 * dt));
   uiGroup.visible = uiAlpha > 0.01;
   if (!uiGroup.visible) return;
+  uiGroup.scale.z = Math.max(1e-3, state.uiDepth);   // every button depth scales about the glass (z = 0); never exactly 0 (degenerate matrix)
 
 
   for (const p of pills) {
@@ -812,6 +828,31 @@ function wake() {
 for (const ev of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'])
   addEventListener(ev, wake, { passive: true });
 wake();
+
+// Button depth slider, shown only with ?tune: value beside it, remembered per browser in tune
+// mode. Without ?tune the default (or ?uidepth=) applies and any saved value is ignored.
+{
+  const tuning = q.has('tune');
+  document.getElementById('tune').hidden = !tuning;
+  const input = document.getElementById('uidepth'), out = document.getElementById('uidepthv');
+  const DEFAULT_UI_DEPTH = 0.6;
+  let v = DEFAULT_UI_DEPTH;
+  if (tuning) try { const saved = localStorage.getItem('worldmap.uiDepth'); if (saved !== null) v = +saved; } catch {}
+  if (q.has('uidepth')) v = +q.get('uidepth');
+  if (!Number.isFinite(v)) v = DEFAULT_UI_DEPTH;
+  const set = (x) => {
+    state.uiDepth = Math.max(0, Math.min(3, x));
+    input.value = state.uiDepth;
+    out.textContent = state.uiDepth.toFixed(2) + '×';
+  };
+  set(v);
+  input.addEventListener('input', () => {
+    set(+input.value);
+    try { localStorage.setItem('worldmap.uiDepth', String(state.uiDepth)); } catch {}
+  });
+  // Keep the page's key shortcuts (-, =, T, L, C, H) working while the slider has focus.
+  input.addEventListener('keydown', (e) => { if (!e.key.startsWith('Arrow') && e.key !== 'Home' && e.key !== 'End') input.blur(); });
+}
 
 function showAnchor() {
   document.getElementById('anchor').textContent = `(${state.anchor === 'world' ? 'world-fixed' : 'head-locked'})`;
