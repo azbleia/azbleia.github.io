@@ -27,6 +27,7 @@
      (layout, hover, click, keyboard). Its focus ring stays visible for keyboard users. */
   #mode.in-scene { background: transparent; border-color: transparent; }
   #mode.in-scene button { color: transparent; background: transparent !important; padding-left: 2.3em; }
+  #mode.in-scene button:focus-visible { outline: none; }   /* the 3D button lifts on keyboard focus instead */
   /* Auto-hiding UI: shown on mouse/keyboard/touch activity, fades out after a few idle seconds. */
   #hud, #mode, #credit { transition: opacity .4s ease; }
   body.idle #hud, body.idle #mode, body.idle #credit { opacity: 0; pointer-events: none; }
@@ -352,8 +353,9 @@ function setStereo(on) {
   stereoFrom = stereo; stereoTo = on ? 1 : 0; stereoT0 = now;
   setModeUI(on);
 }
-btn2d.addEventListener('click', () => setStereo(false));
-btn3d.addEventListener('click', () => setStereo(true));
+// Drop focus after a mouse click, so later key presses (T, L, -/=) don't act on the button.
+btn2d.addEventListener('click', (e) => { setStereo(false); if (e.detail) btn2d.blur(); });
+btn3d.addEventListener('click', (e) => { setStereo(true); if (e.detail) btn3d.blur(); });
 
 // ---- 3D buttons ---------------------------------------------------------------------------
 // The 2D/3D toggle drawn as real geometry so it has depth on the panel: a hovered button rises
