@@ -6,8 +6,8 @@
   <title>Button Playground — DisplayXR UI samples</title>
   <!-- Opt this page into the DisplayXR Browser's lens-aware filtering of 2D content. -->
   <meta name="displayxr-2d-lens-filter" content="on" />
-  <script type="module" crossorigin src="../../assets/playground-H-lvQonQ.js"></script>
-  <link rel="modulepreload" crossorigin href="../../assets/backdrop-DhlEC6y5.js">
+  <script type="module" crossorigin src="../../assets/playground-WerN_LqJ.js"></script>
+  <link rel="modulepreload" crossorigin href="../../assets/backdrop-C_TbtcPg.js">
   <link rel="stylesheet" crossorigin href="../../assets/backdrop-QJGs-BZh.css">
   <link rel="stylesheet" crossorigin href="../../assets/playground-YUT8KGmB.css">
 </head>
@@ -33,12 +33,20 @@
     <aside class="panel tune" data-surface>
       <h2>Custom <small>the last row</small></h2>
       <div class="field">
-        <label for="textCm">Text depth <output id="textCmOut"></output></label>
+        <label for="textCm">Text on hover <output id="textCmOut"></output></label>
         <input type="range" id="textCm" min="-1" max="1.5" step="0.05" />
       </div>
       <div class="field">
-        <label for="faceCm">Face depth <output id="faceCmOut"></output></label>
+        <label for="faceCm">Face on hover <output id="faceCmOut"></output></label>
         <input type="range" id="faceCm" min="-1.5" max="1" step="0.05" />
+      </div>
+      <div class="field">
+        <label for="restCm">Text at rest <output id="restCmOut"></output></label>
+        <input type="range" id="restCm" min="-1" max="1.5" step="0.05" />
+      </div>
+      <div class="field">
+        <label for="restFaceCm">Face at rest <output id="restFaceCmOut"></output></label>
+        <input type="range" id="restFaceCm" min="-1.5" max="1" step="0.05" />
       </div>
       <div class="field two">
         <label for="shadow">Shadow sits</label>
@@ -53,6 +61,7 @@
         <select id="press">
           <option value="face">down to the face</option>
           <option value="glass">all flat on the glass</option>
+          <option value="rest">back to rest</option>
           <option value="none">nowhere</option>
         </select>
       </div>
