@@ -6,10 +6,10 @@
   <title>Button Playground — DisplayXR UI samples</title>
   <!-- Opt this page into the DisplayXR Browser's lens-aware filtering of 2D content. -->
   <meta name="displayxr-2d-lens-filter" content="on" />
-  <script type="module" crossorigin src="../../assets/playground-WerN_LqJ.js"></script>
-  <link rel="modulepreload" crossorigin href="../../assets/backdrop-C_TbtcPg.js">
+  <script type="module" crossorigin src="../../assets/playground-Drh-bDD0.js"></script>
+  <link rel="modulepreload" crossorigin href="../../assets/backdrop-DpRPh1ca.js">
   <link rel="stylesheet" crossorigin href="../../assets/backdrop-QJGs-BZh.css">
-  <link rel="stylesheet" crossorigin href="../../assets/playground-YUT8KGmB.css">
+  <link rel="stylesheet" crossorigin href="../../assets/playground-DyALNW1B.css">
 </head>
 <body>
   <canvas id="stage" aria-hidden="true"></canvas>
@@ -62,8 +62,17 @@
           <option value="face">down to the face</option>
           <option value="glass">all flat on the glass</option>
           <option value="rest">back to rest</option>
+          <option value="depths">to the click depths</option>
           <option value="none">nowhere</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="pressCm">Text on click <output id="pressCmOut"></output></label>
+        <input type="range" id="pressCm" min="-1.5" max="1.5" step="0.05" />
+      </div>
+      <div class="field">
+        <label for="pressFaceCm">Face on click <output id="pressFaceCmOut"></output></label>
+        <input type="range" id="pressFaceCm" min="-1.5" max="1" step="0.05" />
       </div>
       <div class="field two">
         <label for="plate">Whole button as one layer</label>
