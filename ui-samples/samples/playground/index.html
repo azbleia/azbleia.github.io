@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Button Playground — DisplayXR UI samples</title>
+  <!-- Opt this page into the DisplayXR Browser's lens-aware filtering of 2D content. -->
+  <meta name="displayxr-2d-lens-filter" content="on" />
+  <script type="module" crossorigin src="../../assets/playground-Ds7J88HA.js"></script>
+  <link rel="modulepreload" crossorigin href="../../assets/backdrop-DB9cieKT.js">
+  <link rel="stylesheet" crossorigin href="../../assets/backdrop-QJGs-BZh.css">
+  <link rel="stylesheet" crossorigin href="../../assets/playground-YUT8KGmB.css">
+</head>
+<body>
+  <canvas id="stage" aria-hidden="true"></canvas>
+
+  <main class="ui">
+    <header class="top">
+      <a class="back" href="../../" data-lift>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+        Samples
+      </a>
+      <h1>Button Playground</h1>
+      <label class="switch"><input type="checkbox" id="hold" /> Hold all lifted</label>
+      <span class="mode" id="mode">Starting…</span>
+    </header>
+
+    <!-- Rows are effects, columns are button styles. Built by main.ts from PRESETS. -->
+    <section class="panel compare" data-surface>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <aside class="panel tune" data-surface>
+      <h2>Custom <small>the last row</small></h2>
+      <div class="field">
+        <label for="textCm">Text depth <output id="textCmOut"></output></label>
+        <input type="range" id="textCm" min="-1" max="1.5" step="0.05" />
+      </div>
+      <div class="field">
+        <label for="faceCm">Face depth <output id="faceCmOut"></output></label>
+        <input type="range" id="faceCm" min="-1.5" max="1" step="0.05" />
+      </div>
+      <div class="field two">
+        <label for="shadow">Shadow sits</label>
+        <select id="shadow">
+          <option value="face">on the face</option>
+          <option value="text">with the text</option>
+          <option value="none">nowhere</option>
+        </select>
+      </div>
+      <div class="field two">
+        <label for="press">Press sends text</label>
+        <select id="press">
+          <option value="face">down to the face</option>
+          <option value="none">nowhere</option>
+        </select>
+      </div>
+      <div class="field two">
+        <label for="plate">Whole button as one layer</label>
+        <input type="checkbox" id="plate" />
+      </div>
+      <div class="field">
+        <label for="ease">Ease <output id="easeOut"></output></label>
+        <input type="range" id="ease" min="0" max="600" step="10" />
+      </div>
+
+      <h2 class="sub">Label shadow <small>every row</small></h2>
+      <div class="field">
+        <label for="alpha">Strength <output id="alphaOut"></output></label>
+        <input type="range" id="alpha" min="0" max="1" step="0.05" />
+      </div>
+      <div class="field">
+        <label for="blur">Blur <output id="blurOut"></output></label>
+        <input type="range" id="blur" min="0" max="0.8" step="0.01" />
+      </div>
+      <div class="field">
+        <label for="offset">Offset down <output id="offsetOut"></output></label>
+        <input type="range" id="offset" min="0" max="0.5" step="0.02" />
+      </div>
+
+      <h2 class="sub">Markup <small>for the Custom row</small></h2>
+      <code id="markup"></code>
+      <div class="row actions">
+        <button class="btn secondary small" id="reset" type="button">Reset</button>
+        <button class="btn secondary small" id="copy" type="button">Copy markup</button>
+      </div>
+    </aside>
+  </main>
+
+</body>
+</html>
